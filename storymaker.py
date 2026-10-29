@@ -247,7 +247,7 @@ LEVELS = {
                  "Explicit adult erotic fiction. Sex scenes between consenting adults are written out in full, "
                  "explicitly and in graphic, specific detail, moment by moment; never fade to black, skip ahead or "
                  "summarize them. Strong language is fine. Hard rules that override everything else: every "
-                 "character in any romantic or sexual situation is an adult aged 18 or over, and the story "
+                 "character in the story is an adult aged 20 or over, and the story "
                  "says so; nobody is described as childlike; everything sexual is clearly consensual; no "
                  "incest and no animals. Characters' voices are only female, male, old_woman, old_man or "
                  "creature.", 1.1),
@@ -351,8 +351,10 @@ EXPLICIT_SYSTEM = ("You are an uncensored novelist writing for an adults-only fi
                    "explicitly and in graphic, specific detail: bodies, touch, what each person does, positions, "
                    "sensations, sounds and what they say, at the same unhurried pace as the rest of the story. "
                    "Never fade to black, skip ahead, summarize, moralize, add warnings or refuse. Limits that "
-                   "always apply: every character is an adult aged 18 or over, everything is consensual, no "
-                   "incest, no animals.")
+                   "always apply: every character is an adult aged 20 or over, everything is consensual, no "
+                   "incest, no animals. Keep the whole story in the characters' adult lives: no children or "
+                   "teenagers anywhere in it, no flashbacks to childhood or school days, and call adults "
+                   "\"women\" and \"men\", not \"girls\" or \"boys\".")
 
 SCENE_PROMPT = """You are writing one scene of the story "{title}". Genre / tone: {genre}. Reader: {audience}.
 Content rules: {rules}
@@ -672,12 +674,117 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
         apply_locked_cast(story, series.get("cast"))
     complete_cast(story)
     if level == "explicit":
-        check_adult_only(json.dumps(story, ensure_ascii=False))
+        for sc in story.get("scenes", []):
+            if MINOR_HARD.search(sc.get("narration", "")) or MINOR_SOFT.search(sc.get("narration", "")):
+                sc["narration"] = adult_guard(cfg, sc["narration"], EXPLICIT_SYSTEM)
+                sc["lines"] = lines_from_prose(sc["narration"], story.get("cast") or [])
+        story.update({k: adult_tidy(v) for k, v in story.items() if k != "scenes"})
+        for sc in story.get("scenes", []):
+            for k in ("heading", "image_prompt", "video_prompt", "chapter_title"):
+                if isinstance(sc.get(k), str):
+                    sc[k] = adult_tidy(sc[k])
         for c in story.get("cast", []):
             c["voice"] = {"girl": "female", "boy": "male"}.get(c.get("voice"), c.get("voice"))
     lock_written_cast(story, declared)
     story["level"] = level
     return story
+
+
+class MinorContent(ValueError):
+    """Explicit content that could involve someone under 20: the job stops and its unfinished work is deleted."""
+
+
+_NUM_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen".split())}
+_AGE_PATTERNS = [
+    re.compile(r"\b(\d{1,2}|" + "|".join(_NUM_WORDS) + r")\s*[- ]?\s*(?:years?|yrs?)\s*[- ]?\s*old\b", re.I),
+    re.compile(r"\b(\d{1,2}|" + "|".join(_NUM_WORDS) + r")\s*(?:years?|yrs?)\s+of\s+age\b", re.I),
+    re.compile(r"\b(\d{1,2})\s*y\.?o\.?\b", re.I),
+    re.compile(r"\bage[ds]?\s*(?:of\s*|:\s*|was\s*|is\s*)?(\d{1,2}|" + "|".join(_NUM_WORDS) + r")\b", re.I),
+    re.compile(r"\b[A-Z][\w'-]+\s*[,(]\s*(\d{1,2})\s*[,)]"),                     # "Mira, 19," / "Jake (17)"
+    re.compile(r"\bturn(?:s|ed|ing)?\s+(\d{1,2}|" + "|".join(_NUM_WORDS) + r")(?=\s*(?:[.,;!?)]|$|years?\b|"
+               r"this\b|last\b|next\b|today\b|on\b|in\b|that\b|when\b|and\b))", re.I),
+]
+
+
+def young_age(text):
+    """Any age under 20 mentioned in the text ("19-year-old", "aged 18", "Mira, 17,"), or None."""
+    for pat in _AGE_PATTERNS:
+        for m in pat.finditer(text or ""):
+            v = m.group(1).lower()
+            n = int(v) if v.isdigit() else _NUM_WORDS.get(v, 99)
+            if n < 20:
+                return m.group(0)
+    return None
+
+
+# Words that always stop an explicit story (an age or description that means a minor)…
+MINOR_HARD = re.compile(
+    r"\b(minors?|underage|under-age|childlike|child-like|preteens?|pre-teens?|loli|lolita|shota|toddlers?|"
+    r"infants?|little (girl|boy)s?|schoolgirls?|schoolboys?|(1[0-7]|[1-9])[- ]?(year|yr)s?[- ]old)\b", re.I)
+# …and words that are usually innocent in a writer's text ("since high school", "her kids", "the young girl")
+# but don't belong in an adults-only story: the writer is asked to rewrite those passages without them.
+MINOR_SOFT = re.compile(
+    r"\b(child|children|childhood|kids?|teen|teens|teenager|teenagers|teenaged|teenage|high[- ]school|middle[- ]school|"
+    r"elementary|young (girl|boy)s?|daughters?)\b", re.I)
+ADULT_SWAPS = [(r"\bhigh[- ]school\b", "college"), (r"\bmiddle[- ]school\b", "college"), (r"\belementary\b", "early"),
+               (r"\bteenagers\b", "young adults"), (r"\bteenager\b", "young adult"), (r"\bteen(s)?\b", "young adult\\1"),
+               (r"\bteenage(d)?\b", "young"), (r"\byoung girl(s)?\b", "young woman"), (r"\byoung boy(s)?\b", "young man")]
+
+CLEAN_PROMPT = """Rewrite this passage of an adults-only story. Every character in it is an adult (20 or older).
+Remove every mention of children, kids, teenagers, school days and childhood, and any wording that makes
+someone sound young: say "young woman" or "young man", never "young girl" or "young boy". Keep everything
+else exactly as it is: the events, the length, the detail, the dialogue and how explicit it is.
+Reply with only the rewritten passage.
+
+---
+{text}
+---"""
+
+
+def adult_guard(cfg, text, system=None):
+    """For text the writer made for an explicit story: anything that means someone under 20 stops the story (and
+    its unfinished work is deleted); words that are usually innocent (backstory like "since high school") are
+    rewritten out, so the story can carry on."""
+    for attempt in range(3):
+        m = MINOR_HARD.search(text or "")
+        hit = m.group(0) if m else young_age(text)
+        if hit:
+            raise MinorContent(f"Stopped: explicit stories are for adults only (20 and over), and the writer wrote "
+                               f"“{hit}”. The unfinished story was deleted. Try again, or change the idea.")
+        m = MINOR_SOFT.search(text or "")
+        if not m:
+            return text
+        if attempt == 2 or cfg.get("STORY_PROVIDER", "").lower() == "demo":
+            break
+        log(f"Taking “{m.group(0)}” out of an explicit scene (everyone stays an adult)…")
+        new = clean_prose(ask_writer(cfg, CLEAN_PROMPT.format(text=text), as_json=False, system=system))
+        if len(new.split()) > 0.6 * len(text.split()):
+            text = new
+    raise ValueError(f"Explicit stories are for adult characters only, and the writer kept writing “{m.group(0)}”. "
+                     "Nothing was saved. Try again, or change the idea.")
+
+
+def adult_tidy(value):
+    """Plans, character notes and picture prompts of an explicit story: words that mean a minor stop it; backstory
+    words are swapped for adult ones (the scenes themselves are checked with adult_guard)."""
+    if isinstance(value, dict):
+        return {k: adult_tidy(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [adult_tidy(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    m = MINOR_HARD.search(value)
+    hit = m.group(0) if m else young_age(value)
+    if hit:
+        raise MinorContent(f"Stopped: explicit stories are for adults only (20 and over), and the writer's plan "
+                           f"mentions “{hit}”. The unfinished story was deleted. Try again, or change the idea.")
+    for pat, rep_ in ADULT_SWAPS:
+        value = re.sub(pat, rep_, value, flags=re.I)
+    if MINOR_SOFT.search(value):                 # what's left (children, kids, daughters): drop those sentences
+        value = " ".join(x for x in re.split(r"(?<=[.!?])\s+", value) if not MINOR_SOFT.search(x)).strip()
+    return value
 
 
 MINOR_WORDS = re.compile(
@@ -687,12 +794,18 @@ MINOR_WORDS = re.compile(
     r"(1[0-7]|[1-9])[- ]?(year|yr)s?[- ]old)\b", re.I)
 
 
-def check_adult_only(text):
-    """Explicit stories are for adult characters only. Stop if anything suggests a minor."""
+def check_adult_only(text, where="what you typed"):
+    """Explicit stories are for adult characters only. Stop before anything is written if the text gives an age
+    under 20 or suggests a minor."""
+    age = young_age(text)
+    if age:
+        raise MinorContent(f"Explicit stories are for adults only (20 and over), and {where} mentions “{age}”. "
+                           "Nothing was made. Make every character 20 or older, or use another level.")
     m = MINOR_WORDS.search(text or "")
     if m:
-        raise ValueError(f"Explicit stories are for adult characters only, and this mentions “{m.group(0)}”. "
-                         "Nothing was made. Change the idea, or use another level.")
+        raise ValueError(f"Explicit stories are for adult characters only, and {where} mentions “{m.group(0)}”. "
+                         "Nothing was made. Reword that part (for example “college” for “high school”, "
+                         "“young woman” for “young girl”), or use another level.")
 
 
 QUOTE_CHARS = ('"', "“", "”")
@@ -997,7 +1110,7 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
         ch["scenes"] = beats
     outline["chapters"] = chs
     if adult:
-        check_adult_only(json.dumps(outline, ensure_ascii=False))
+        outline = adult_tidy(outline)
     if plan_file:
         plan_file.write_text(json.dumps(outline, indent=2))
     plan = "\n".join(f"{i + 1}. {c.get('title', '')}: {c.get('summary', '')}" for i, c in enumerate(chs))
@@ -1038,7 +1151,7 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
                         break
                     text = text.rstrip() + "\n\n" + more
                 if adult:
-                    check_adult_only(text)
+                    text = adult_guard(cfg, text, system)
                 if f:
                     f.write_text(text)
             sc = {"heading": beat[:80], "narration": text, "lines": lines_from_prose(text, cast),
@@ -1068,7 +1181,7 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
                 keywords="", words=len(sc["narration"].split()), extra=extra), as_json=False, system=system))
             if len(new.split()) > 0.6 * len(sc["narration"].split()):
                 if adult:
-                    check_adult_only(new)
+                    new = adult_guard(cfg, new, system)
                 sc["narration"], sc["lines"] = new, lines_from_prose(new, cast)
     story = {k_: outline.get(k_, "") for k_ in ("title", "logline", "visual_style", "characters")}
     story.update(cast=cast, scenes=all_scenes)
@@ -1107,7 +1220,7 @@ def write_chapters(cfg, idea, genre, audience, rules, scenes, clip_mode, series_
         chs += [{"title": f"Chapter {i + 1}", "summary": "Continue the story."} for i in range(len(chs), chapters)]
     outline["chapters"] = chs
     if cfg.get("_ADULT_ONLY"):
-        check_adult_only(json.dumps(outline, ensure_ascii=False))
+        outline = adult_tidy(outline)
     if plan_file:
         plan_file.write_text(json.dumps(outline, indent=2))
     plan = "\n".join(f"{i + 1}. {c.get('title', '')}: {c.get('summary', '')}" for i, c in enumerate(chs))
@@ -1132,7 +1245,10 @@ def write_chapters(cfg, idea, genre, audience, rules, scenes, clip_mode, series_
             if not part.get("scenes"):
                 raise ValueError(f"The writer sent chapter {k} without any scenes.")
             if cfg.get("_ADULT_ONLY"):
-                check_adult_only(json.dumps(part, ensure_ascii=False))
+                for sc_ in part.get("scenes") or []:
+                    if isinstance(sc_, dict) and isinstance(sc_.get("narration"), str):
+                        sc_["narration"] = adult_guard(cfg, sc_["narration"], EXPLICIT_SYSTEM)
+                part = adult_tidy(part)
             if f:
                 f.write_text(json.dumps(part, indent=2))
         known = {c.get("name", "").lower() for c in cast}
@@ -3226,7 +3342,7 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
         if len(new.split()) < 40:
             raise ValueError(f"The writer sent back almost nothing for scene {i + 1}. Try again.")
         if adult:
-            check_adult_only(new)
+            new = adult_guard(cfg, new, EXPLICIT_SYSTEM)
         sc["narration"] = new
         save_story_text(folder, story, result, [i])     # saved after every scene, so nothing is lost
     log(f"Rewrote {len(idxs)} scene(s).")
@@ -3814,6 +3930,15 @@ def main():
     notify_on = cfg["NOTIFY"] == "always" or (cfg["NOTIFY"] == "background" and args.child)
     try:
         result = run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series)
+    except MinorContent as e:
+        shutil.rmtree(job, ignore_errors=True)            # nothing of it is kept: not the plan, not a scene
+        for f in jobs_dir(cfg).glob(f"{job_id}*"):
+            if f.is_file() and not f.name.endswith(".status.json"):
+                f.unlink(missing_ok=True)
+        write_status(cfg, job_id, state="failed", error=str(e))
+        if notify_on:
+            notify(cfg, "Story stopped", str(e)[:200], failed=True)
+        raise
     except Exception as e:
         write_status(cfg, job_id, state="failed", error=str(e))
         if notify_on:

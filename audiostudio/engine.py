@@ -579,7 +579,8 @@ def run_casting(cfg, pid, progress=lambda f, d: None, only=None):
             cur, words = [], 0
     if cur:
         batches.append(cur)
-    extra = ("This is an explicit adult story; emotions like seductive and breathless fit intimate moments.\n"
+    extra = ("This is an explicit adult story: every character is an adult (20 or older), so use age 'adult' or 'elder' only. "
+             "Emotions like seductive and breathless fit intimate moments.\n"
              if p["level"] == "explicit" else "")
     for b_i, batch in enumerate(batches):
         progress(b_i / max(1, len(batches)), f"Casting: part {b_i + 1} of {len(batches)}")
@@ -664,6 +665,13 @@ def run_casting(cfg, pid, progress=lambda f, d: None, only=None):
         save_project(d, p, s)
     # the text has the last word: genders from its pronouns, then speakers from its speech tags again
     check_genders(p, s)
+    if p["level"] == "explicit":                  # adults only: nobody in an explicit book may read as under 20
+        young = [c["name"] for c in cast if c.get("age") in ("child", "teen")]
+        if young:
+            save_project(d, p, s)
+            raise ValueError(f"Stopped: this is an explicit book, and the casting read {', '.join(young)} as under 20. "
+                             "Explicit books are for adults only. If that's wrong, set their age to Adult in the "
+                             "Cast step; if not, this book can't be made.")
     for sec_id, segs in s["sections"].items():
         if not sec_id.endswith(":cast"):
             check_speakers(segs, p["cast"])
@@ -1488,6 +1496,8 @@ def update_cast(cfg, pid, cast_in, narrator=None):
                 c["voice"] = ""                          # a voice of the other gender no longer fits
             c["gender"] = item["gender"]
         if item.get("age") in ("child", "teen", "adult", "elder"):
+            if p["level"] == "explicit" and item["age"] in ("child", "teen"):
+                raise ValueError("Explicit books are for adults only: every character must be Adult or Elder.")
             c["age"] = item["age"]
         if item.get("kind") in ("person", "creature"):
             c["kind"] = item["kind"]
