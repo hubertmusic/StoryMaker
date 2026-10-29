@@ -1,0 +1,14 @@
+{
+  "name": "storymaker-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web page for StoryMaker",
+  "main": "server.js",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node --experimental-sqlite --disable-warning=ExperimentalWarning server.js"
+  },
+  "dependencies": {
+    "express": "4.21.2"
+  }
+}

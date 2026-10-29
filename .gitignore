@@ -1,0 +1,19 @@
+# Your private settings and keys: never in git
+storymaker.env
+audiostudio/studio.env
+*.env.rescued
+
+# Your stories, sounds, music and Audio Studio books
+output/
+sounds/
+music/
+studio/
+
+# Installed or generated
+audiostudio/venv/
+web/node_modules/
+web/package-lock.json
+__pycache__/
+*.pyc
+*.log
+.DS_Store

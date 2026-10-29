@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StoryMaker</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1 class="brand">StoryMaker</h1>
+  <nav>
+    <a href="#make">Make a story</a>
+    <a href="#library">Library</a>
+    <span class="who" id="whoAmI"></span>
+    <button type="button" class="quiet signout" id="signOut">Sign out</button>
+    <button type="button" class="gear" id="gearBtn" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6a.5.5 0 0 0 .1-.6l-1.9-3.3a.5.5 0 0 0-.6-.2l-2.4 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-3.8a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.4-1a.5.5 0 0 0-.6.2L2.5 8.8a.5.5 0 0 0 .1.6L4.6 11a7.5 7.5 0 0 0 0 2l-2 1.6a.5.5 0 0 0-.1.6l1.9 3.3c.1.2.4.3.6.2l2.4-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h3.8c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.4 1c.2.1.5 0 .6-.2l1.9-3.3a.5.5 0 0 0-.1-.6L19.4 13ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
+    </button>
+  </nav>
+</header>
+
+<main>
+  <section id="make" class="studio">
+    <form id="form" class="panel" autocomplete="off">
+      <fieldset class="choice" id="kind">
+        <legend>What are we making?</legend>
+        <label><input type="radio" name="kind" value="new" checked> A new story</label>
+        <label><input type="radio" name="kind" value="next"> The next episode</label>
+      </fieldset>
+
+      <div id="seriesRow" class="field" hidden>
+        <label for="series">Which story continues?</label>
+        <select id="series"></select>
+      </div>
+
+      <div class="field">
+        <label for="idea" id="ideaLabel">What should the story be about?</label>
+        <textarea id="idea" rows="3" placeholder="A lighthouse keeper who befriends a storm"></textarea>
+      </div>
+
+      <fieldset class="field" id="levelRow">
+        <legend>Who is it for?</legend>
+        <div class="chips">
+          <label><input type="radio" name="level" value="young-kids"><span>Young kids <small>3–5</small></span></label>
+          <label><input type="radio" name="level" value="kids"><span>Kids <small>6–8</small></span></label>
+          <label><input type="radio" name="level" value="middle-grade"><span>Middle grade <small>9–12</small></span></label>
+          <label><input type="radio" name="level" value="teen"><span>Teens</span></label>
+          <label><input type="radio" name="level" value="adult"><span>Adults</span></label>
+          <label id="matureChip" hidden><input type="radio" name="level" value="mature"><span>Mature <small>R</small></span></label>
+          <label id="explicitChip" hidden><input type="radio" name="level" value="explicit"><span>Explicit <small>18+</small></span></label>
+          <label><input type="radio" name="level" value="family" checked><span>Everyone</span></label>
+        </div>
+        <div class="explicit-box" id="explicitControls" hidden>
+          <label for="heat">Heat <output id="heatOut">4 · very explicit</output></label>
+          <input id="heat" type="range" min="1" max="5" value="4">
+          <div class="mini-legend"><span>Sensual</span><span>Maximum</span></div>
+          <fieldset class="field">
+            <legend>Pacing</legend>
+            <div class="chips">
+              <label><input type="radio" name="pacing" value="slow"><span>Slow burn</span></label>
+              <label><input type="radio" name="pacing" value="steady" checked><span>Steady</span></label>
+              <label><input type="radio" name="pacing" value="fast"><span>Straight to it</span></label>
+            </div>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Language</legend>
+            <div class="chips">
+              <label><input type="radio" name="language" value="tasteful"><span>Tasteful</span></label>
+              <label><input type="radio" name="language" value="frank" checked><span>Frank</span></label>
+              <label><input type="radio" name="language" value="crude"><span>Crude</span></label>
+            </div>
+          </fieldset>
+          <div class="field">
+            <label for="turnOns">Turn-ons to include <small class="opt">optional</small></label>
+            <input id="turnOns" type="text" maxlength="400" placeholder="slow teasing, lingerie, a shower scene">
+          </div>
+          <div class="field">
+            <label for="limits">Hard limits, never include <small class="opt">optional</small></label>
+            <input id="limits" type="text" maxlength="400" placeholder="anything you don't want">
+          </div>
+        </div>
+        <p class="level-note" id="explicitNote" hidden>Written on this computer by your own local AI and read in a
+          local voice: nothing leaves your Mac. Pictures and moving-picture video come from your own picture app,
+          tasteful only. Adult characters only.</p>
+      </fieldset>
+
+      <div class="field">
+        <label for="genre">Genre or mood</label>
+        <input id="genre" value="heartwarming adventure">
+      </div>
+
+      <div class="field">
+        <label for="keywords">Words or phrases to include <small class="opt">optional</small></label>
+        <input id="keywords" type="text" maxlength="600" placeholder="lantern, salt air, “I never stopped looking for you”">
+        <p class="level-note">Separate them with commas. The writer works every one into the story.</p>
+      </div>
+
+      <div class="field">
+        <label for="sounds">Sounds you want to hear <small class="opt">optional</small></label>
+        <input id="sounds" type="text" maxlength="300" placeholder="rain on the window, thunder, seagulls, a crackling fire">
+      </div>
+
+      <div class="field">
+        <label for="narrator">Narrator's voice</label>
+        <div class="voice-pick" id="narratorPick"></div>
+      </div>
+
+      <div class="row2">
+        <div class="field">
+          <label for="chapters">Length</label>
+          <select id="chapters">
+            <option value="1">One story</option>
+            <option value="2">2 chapters</option>
+            <option value="3">3 chapters</option>
+            <option value="4">4 chapters</option>
+            <option value="5">5 chapters</option>
+            <option value="6">6 chapters</option>
+            <option value="8">8 chapters</option>
+            <option value="10">10 chapters</option>
+            <option value="12">12 chapters</option>
+            <option value="15">15 chapters</option>
+            <option value="20">20 chapters</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="scenes"><span id="scenesLabel">Scenes</span> <output id="scenesOut">5</output></label>
+          <input id="scenes" type="range" min="2" max="10" value="5">
+        </div>
+      </div>
+      <fieldset class="field">
+        <legend>Scene length</legend>
+        <div class="chips">
+          <label><input type="radio" name="detail" value="brief"><span>Brief</span></label>
+          <label><input type="radio" name="detail" value="standard" checked><span>Standard</span></label>
+          <label><input type="radio" name="detail" value="rich"><span>Rich and detailed</span></label>
+          <label><input type="radio" name="detail" value="epic"><span>Epic</span></label>
+        </div>
+      </fieldset>
+      <p class="level-note" id="lengthNote" hidden></p>
+
+      <fieldset class="field">
+        <legend>Make</legend>
+        <div class="chips">
+          <label><input type="radio" name="mode" value="story"><span>Story</span></label>
+          <label><input type="radio" name="mode" value="audio"><span>Story + audio</span></label>
+          <label><input type="radio" name="mode" value="video" checked><span>Story + audio + video</span></label>
+        </div>
+      </fieldset>
+
+      <details class="more">
+        <summary>More options</summary>
+        <div class="row2">
+          <div class="field">
+            <label for="video">Video</label>
+            <select id="video">
+              <option value="auto">From settings</option>
+              <option value="omni">AI clips (Gemini Omni)</option>
+              <option value="veo">AI clips (Veo 3.1)</option>
+              <option value="slideshow">Picture slideshow</option>
+              <option value="demo">Test clips (free)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="writer">Writer</label>
+            <select id="writer">
+              <option value="">From settings</option>
+              <option value="claude">Claude</option>
+              <option value="gemini">Gemini</option>
+              <option value="openai">OpenAI</option>
+              <option value="groq">Groq (free tier)</option>
+              <option value="ollama">Ollama (on this computer)</option>
+              <option value="demo">Test story (free)</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="pov">Told by</label>
+          <select id="pov">
+            <option value="">The writer decides</option>
+            <option value="third">A narrator (third person: "she said")</option>
+            <option value="first">The main character (first person: "I said")</option>
+          </select>
+        </div>
+        <label class="check"><input type="checkbox" id="portrait"> Phone-shaped video (9:16)</label>
+        <label class="check"><input type="checkbox" id="book"> Picture book for story or audio (draws pictures)</label>
+      </details>
+
+      <button type="submit" class="go" id="priceBtn">Check the price</button>
+    </form>
+
+    <div class="stage" id="stage" aria-live="polite">
+      <div class="stage-empty" id="stageEmpty">
+        <p class="stage-title">Your story appears here.</p>
+        <p>Check the price first — nothing is spent until you press <b>Make it</b>.</p>
+      </div>
+
+      <div id="priceView" hidden>
+        <p class="price" id="priceText"></p>
+        <p class="price-detail" id="priceDetail"></p>
+        <div class="actions">
+          <button class="go" id="makeBtn">Make it</button>
+          <button class="quiet" id="changeBtn" type="button">Change something</button>
+        </div>
+      </div>
+
+      <div id="progressView" hidden>
+        <p class="stage-title" id="progressTitle">Working on it</p>
+        <ol class="lamps" id="lamps">
+          <li data-step="writing">Writing</li>
+          <li data-step="narration">Voices</li>
+          <li data-step="characters">Characters</li>
+          <li data-step="video">Filming</li>
+          <li data-step="book">Picture book</li>
+        </ol>
+        <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="meter-fill" id="meterFill"></div>
+        </div>
+        <p class="meter-text"><span id="detail">Starting…</span><span id="pct">0%</span></p>
+        <div class="preview" id="preview" hidden>
+          <img class="preview-art" id="previewImg" alt="" hidden>
+          <div class="preview-words">
+            <p class="preview-logline" id="previewLogline"></p>
+            <p class="preview-text" id="previewText"></p>
+          </div>
+          <div class="preview-strip" id="previewStrip"></div>
+        </div>
+        <p class="hint">You can close this page — it keeps going, and the finished story will be in your library.</p>
+      </div>
+
+      <div id="resultView" hidden></div>
+      <p class="error" id="error" hidden></p>
+    </div>
+  </section>
+
+  <section id="library" class="library">
+    <div class="library-head">
+      <h2>Library</h2>
+      <select id="filter" aria-label="Show stories from"><option value="">All stories</option></select>
+    </div>
+    <div class="shelf" id="shelf"></div>
+    <p class="empty" id="shelfEmpty" hidden>No stories yet. Make your first one above.</p>
+  </section>
+</main>
+
+<dialog id="settings" aria-labelledby="settingsTitle">
+  <form method="dialog" class="dlg-x"><button class="x-btn" aria-label="Close" title="Close">&times;</button></form>
+  <div class="settings">
+    <h3 id="settingsTitle">Settings</h3>
+    <form id="meForm" autocomplete="off">
+      <fieldset>
+        <legend>My account</legend>
+        <label for="setUser">User name</label>
+        <input id="setUser" type="text" maxlength="40" autocomplete="username">
+        <label for="setPw">New password <small>(leave blank to keep it)</small></label>
+        <input id="setPw" type="password" autocomplete="new-password">
+        <label for="setPw2">Type the new password again</label>
+        <input id="setPw2" type="password" autocomplete="new-password">
+      </fieldset>
+      <fieldset id="adultBlock" hidden>
+        <legend>Grown-up stories</legend>
+        <label class="switch">
+          <input type="checkbox" id="setAdult" role="switch">
+          <span class="track" aria-hidden="true"><span class="knob"></span></span>
+          <span>Show Mature and Explicit</span>
+        </label>
+        <p class="level-note">When this is off, only the family-safe levels show and grown-up stories are hidden from
+          the library. Explicit (18+) is only ever available on your account.</p>
+      </fieldset>
+      <fieldset>
+        <label for="setCurrent">Current password <small>(needed to save)</small></label>
+        <input id="setCurrent" type="password" autocomplete="current-password">
+      </fieldset>
+      <p class="settings-msg" id="settingsMsg" role="status"></p>
+      <div class="actions">
+        <button class="go" type="submit" id="settingsSave">Save my account</button>
+      </div>
+    </form>
+
+    <section id="peopleBlock" hidden>
+      <h4>People</h4>
+      <p class="level-note">Everyone signs in with their own name and sees only their own stories. You see all of them.</p>
+      <div id="peopleList" class="people"></div>
+      <form id="addPersonForm" class="add-person" autocomplete="off">
+        <h5>Add someone</h5>
+        <label for="newName">User name</label>
+        <input id="newName" type="text" maxlength="40" autocomplete="off">
+        <label for="newPw">Password for them <small>(at least 6 characters)</small></label>
+        <input id="newPw" type="password" autocomplete="new-password">
+        <label class="check"><input type="checkbox" id="newMature"> Can make Mature (R) stories</label>
+        <p class="settings-msg" id="peopleMsg" role="status"></p>
+        <button class="go" type="submit">Add this person</button>
+      </form>
+    </section>
+  </div>
+  <form method="dialog" class="dlg-float"><button class="float-close">Close</button></form>
+</dialog>
+
+<dialog id="viewer">
+  <form method="dialog" class="dlg-x"><button class="x-btn" aria-label="Close" title="Close">&times;</button></form>
+  <div class="viewer-body" id="viewerBody"></div>
+  <form method="dialog" class="dlg-float"><button class="float-close">Close</button></form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

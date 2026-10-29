@@ -1,0 +1,7 @@
+requests
+pillow
+# optional free narrator voice for servers without an OpenAI key:
+# edge-tts
+# Free, smooth local voices (needs Python 3.10 or newer). Optional.
+kokoro-onnx
+soundfile

@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Studio</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<header class="top">
+  <h1 class="brand"><a href="#" id="homeLink">Audio Studio</a></h1>
+  <nav>
+    <a id="smLink" href="#">StoryMaker</a>
+    <span class="who" id="whoAmI"></span>
+    <button type="button" class="quiet signout" id="signOut">Sign out</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ───────── home: bring in a book, your audiobooks ───────── -->
+  <section id="home">
+    <div class="home-grid">
+      <form class="panel" id="importForm" autocomplete="off">
+        <h2 class="panel-h">Bring in a book</h2>
+        <fieldset class="choice three" id="srcKind">
+          <legend>Where is it?</legend>
+          <label><input type="radio" name="src" value="sm" checked> StoryMaker</label>
+          <label><input type="radio" name="src" value="file"> A file</label>
+          <label><input type="radio" name="src" value="paste"> Paste</label>
+        </fieldset>
+
+        <div id="srcSm" class="field">
+          <label for="smStory">Story</label>
+          <select id="smStory"><option value="">Loading your stories…</option></select>
+          <p class="hint" id="smNote">Characters you tagged as woman, man, girl or boy in StoryMaker come across locked.</p>
+        </div>
+
+        <div id="srcFile" class="field" hidden>
+          <label for="bookFile">Book file</label>
+          <input id="bookFile" type="file" accept=".txt,.md,.docx,.epub,.pdf">
+          <p class="hint">.epub, .docx, .pdf, .txt or .md. Chapters are found from the headings. A <strong>Characters</strong> list at the start (“Mira: a woman”, one per line) locks who is who.</p>
+        </div>
+
+        <div id="srcPaste" class="field" hidden>
+          <label for="pasteText">Text</label>
+          <textarea id="pasteText" rows="7" placeholder="Characters&#10;Mira: a woman&#10;Jake: a man&#10;&#10;Chapter 1&#10;Paste the story here. Lines like “Chapter 2” start new chapters; * * * starts a new scene."></textarea>
+          <p class="hint">Start with a <strong>Characters</strong> list (name, then woman, man, girl, boy, older woman, older man or creature) and those genders are locked.</p>
+        </div>
+
+        <div class="field" id="titleRow" hidden>
+          <label for="bookTitle">Title <small class="opt">(optional)</small></label>
+          <input id="bookTitle" type="text" maxlength="120">
+        </div>
+
+        <fieldset class="field" id="levelRow" hidden>
+          <legend>Who is it for?</legend>
+          <div class="chips" id="levelChips"></div>
+        </fieldset>
+
+        <p class="error" id="importErr" role="alert" hidden></p>
+        <button class="go" type="submit" id="importGo">Bring it in</button>
+      </form>
+
+      <section class="shelf-wrap" aria-labelledby="booksH">
+        <h2 id="booksH" class="panel-h">Your audiobooks</h2>
+        <div id="books" class="books"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ───────── one book ───────── -->
+  <section id="book" hidden>
+    <div class="book-head">
+      <a href="#" class="back">All audiobooks</a>
+      <h2 id="bTitle" class="book-title"></h2>
+      <p class="book-meta" id="bMeta"></p>
+    </div>
+
+    <div class="runbar panel" id="runbar">
+      <div class="runbar-main">
+        <p class="run-state" id="runState"></p>
+        <div class="meter" id="runMeterWrap" hidden><div class="meter-fill" id="runMeter"></div></div>
+        <p class="hint run-detail" id="runDetail"></p>
+      </div>
+      <div class="runbar-buttons">
+        <button type="button" class="go" id="makeAll">Make the audiobook</button>
+        <button type="button" class="quiet" id="stopJob" hidden>Stop</button>
+      </div>
+    </div>
+
+    <nav class="steps" aria-label="Steps">
+      <button type="button" class="step" data-tab="cast"><span class="n">1</span>Cast</button>
+      <button type="button" class="step" data-tab="script"><span class="n">2</span>Script</button>
+      <button type="button" class="step" data-tab="sounds"><span class="n">3</span>Sounds</button>
+      <button type="button" class="step" data-tab="record"><span class="n">4</span>Record</button>
+      <button type="button" class="step" data-tab="listen"><span class="n">5</span>Listen</button>
+    </nav>
+
+    <!-- 1 cast -->
+    <section class="tab" id="tab-cast">
+      <div class="tab-intro">
+        <p>Every speaking part, with who they are. <strong>Locked</strong> characters are never changed by the AI: check each one, set woman or man and their age, then lock them.</p>
+        <div class="tab-buttons">
+          <button type="button" class="small-btn" id="findCast">Find who speaks</button>
+          <button type="button" class="small-btn" id="recast" hidden>Read the whole book again</button>
+          <button type="button" class="small-btn" id="openLib">Voice library</button>
+        </div>
+      </div>
+      <div class="cast-list" id="castList"></div>
+      <div class="savebar"><button type="button" class="go" id="saveCast">Save the cast</button><span class="saved" id="castSaved"></span></div>
+    </section>
+
+    <!-- 2 script -->
+    <section class="tab" id="tab-script" hidden>
+      <div class="tab-intro">
+        <p>Every line and who says it. Lines the text disagreed with are marked; the speech tags in the book (“she said”, “Sam asked”) always win over a guess.</p>
+        <div class="script-tools">
+          <label for="chapterPick" class="sr">Chapter</label>
+          <select id="chapterPick"></select>
+          <label class="check"><input type="checkbox" id="onlyCheck"> Only lines to check</label>
+          <label class="check"><input type="checkbox" id="onlyTalk"> Only dialogue</label>
+        </div>
+      </div>
+      <ol class="script" id="script"></ol>
+      <div class="savebar"><button type="button" class="go" id="saveScript" disabled>Save changes</button><span class="saved" id="scriptSaved"></span></div>
+    </section>
+
+    <!-- 3 sounds -->
+    <section class="tab" id="tab-sounds" hidden>
+      <div class="tab-intro">
+        <p>What you hear behind the voices in each scene. Effects play at the words you give in “when”.</p>
+        <div class="field">
+          <label for="wishes">Sounds you want to hear <small class="opt">(optional)</small></label>
+          <input id="wishes" type="text" maxlength="300" placeholder="rain on windows, crackling fire, seagulls">
+        </div>
+        <div class="tab-buttons"><button type="button" class="small-btn" id="designSounds">Choose sounds with AI</button></div>
+      </div>
+      <div id="soundList"></div>
+      <div class="savebar"><button type="button" class="go" id="saveSounds">Save the sounds</button><span class="saved" id="soundsSaved"></span></div>
+    </section>
+
+    <!-- 4 record -->
+    <section class="tab" id="tab-record" hidden>
+      <fieldset class="engine-pick">
+        <legend>Voices</legend>
+        <label class="engine"><input type="radio" name="engine" value="chatterbox">
+          <span><strong>Chatterbox</strong> natural and expressive, with emotion. About as long as the book itself to record.</span></label>
+        <label class="engine"><input type="radio" name="engine" value="kokoro">
+          <span><strong>Kokoro</strong> fast drafts. Clear and smooth, less acting. A few minutes per hour of book.</span></label>
+        <p class="hint" id="cbMissing" hidden>Chatterbox isn't installed on this Mac yet. The studio's README has the one-line install.</p>
+      </fieldset>
+      <div class="tab-buttons">
+        <button type="button" class="go" id="recordAll">Record the whole book</button>
+      </div>
+      <p class="hint">Every line is kept as it's recorded. Stop any time, or change a line, and only what changed is recorded again.</p>
+      <ol class="chapter-list" id="chapterList"></ol>
+    </section>
+
+    <!-- 5 listen -->
+    <section class="tab" id="tab-listen" hidden>
+      <div class="listen" id="listen"></div>
+    </section>
+
+    <div class="danger">
+      <button type="button" class="small-btn warn" id="deleteBook">Delete this audiobook</button>
+      <span id="deleteConfirm" hidden>Delete it and every recording? <button type="button" class="delete" id="deleteYes">Delete</button> <button type="button" class="quiet" id="deleteNo">Keep it</button></span>
+    </div>
+  </section>
+</main>
+
+<dialog id="voiceLib" aria-labelledby="libH">
+  <form method="dialog" class="dlg-x"><button class="x-btn" aria-label="Close" title="Close">&times;</button></form>
+  <h3 id="libH" class="panel-h">Voice library</h3>
+  <p class="hint">Listen with <select id="libEngine" class="inline-sel"><option value="kokoro">Kokoro</option><option value="chatterbox">Chatterbox</option></select>. Chatterbox learns each voice from a short sample, so it can also use a clip of your own.</p>
+  <form class="upload" id="uploadForm">
+    <strong>Add your own voice</strong>
+    <span class="hint">10–30 seconds of one person reading clearly, no music. Only use a voice you have the right to use (your own, or someone who said yes).</span>
+    <input type="file" id="clipFile" accept=".wav,.mp3,.m4a,.flac" required>
+    <div class="row2" style="margin-top:0">
+      <input type="text" id="clipName" placeholder="Name, e.g. Grandpa Joe" maxlength="40" required>
+      <select id="clipGender"><option value="female">Woman</option><option value="male">Man</option></select>
+    </div>
+    <button class="small-btn" type="submit" id="clipGo">Add the voice</button>
+    <span class="saved" id="clipMsg"></span>
+  </form>
+  <div id="libList"></div>
+  <form method="dialog" class="dlg-float"><button class="float-close">Close</button></form>
+</dialog>
+
+<audio id="player" hidden></audio>
+<script src="app.js"></script>
+</body>
+</html>

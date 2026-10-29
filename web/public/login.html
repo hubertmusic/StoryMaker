@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · StoryMaker</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="login-page">
+<main class="login">
+  <h1 class="brand">StoryMaker</h1>
+  <form id="loginForm" class="panel" autocomplete="on">
+    <label for="u">User name</label>
+    <input id="u" type="text" autocomplete="username" required>
+    <label for="p">Password</label>
+    <input id="p" type="password" autocomplete="current-password" required>
+    <p class="error" id="err" role="alert" hidden></p>
+    <button class="go" type="submit" id="go">Sign in</button>
+  </form>
+</main>
+<script src="login.js"></script>
+</body>
+</html>

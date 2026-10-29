@@ -1,0 +1,26 @@
+# StoryMaker web page — run from this folder:  docker compose up -d --build
+# Then open http://localhost:8095 (or your Cloudflare Tunnel address).
+services:
+  storymaker:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: storymaker
+    restart: unless-stopped
+    ports:
+      - "8095:3000"
+    environment:
+      # The owner's first user name and password come from APP_USER= and APP_PASSWORD= in storymaker.env
+      # (update.sh asks for them the first time); after that, change them with the gear icon.
+      # Ollama running on the Mac itself (not in Docker):
+      OLLAMA_URL: "http://host.docker.internal:11434"
+      # The "Send to Audio Studio" button. Blank = this address on port 8096 (or 8443 over https/Tailscale).
+      AUDIO_STUDIO_URL: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./storymaker.env:/app/storymaker.env:ro   # your keys and settings
+      - ./output:/data/output                     # finished stories (the library)
+      - ./music:/data/music                       # optional background music
+      - ./sounds:/data/sounds                     # soundscapes: your own recordings (starter sounds are made here)
+      - ./web/public:/app/public                  # edit the page without rebuilding

@@ -1,0 +1,11 @@
+# Audio Studio (runs on the Mac itself). Chatterbox is installed separately by install.sh.
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+requests>=2.31
+pillow>=10.0
+soundfile>=0.12
+kokoro-onnx>=0.4
+pypdf>=4.0
+python-docx>=1.1
+edge-tts>=6.1
