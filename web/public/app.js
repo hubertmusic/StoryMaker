@@ -3,6 +3,7 @@ const STEPS = ["writing", "narration", "characters", "video", "book"];
 const LEVEL_NAMES = { "young-kids": "Young kids", kids: "Kids", "middle-grade": "Middle grade", teen: "Teens", adult: "Adults", mature: "Mature (R)", explicit: "Explicit (18+)", family: "Everyone" };
 let seriesList = [];
 let polling = null;
+let followingId = null;          // the story this page is showing progress for
 
 function formData() {
   const kind = document.querySelector('input[name="kind"]:checked').value;
@@ -300,6 +301,7 @@ function showPreview(jobId, st) {
 
 function poll(jobId, data) {
   clearInterval(polling);
+  followingId = jobId;
   polling = setInterval(async () => {
     const st = await api(`/api/status/${jobId}`);
     if (st.state === "running" || st.state === "queued") {
@@ -310,11 +312,13 @@ function poll(jobId, data) {
     } else if (st.state === "done") {
       setMeter(100, "Done");
       clearInterval(polling);
+      followingId = null;
       showResult(st.result);
       loadLibrary();
       loadSeries();
     } else if (st.state === "failed") {
       clearInterval(polling);
+      followingId = null;
       show("progressView");
       showError(`${st.error} Press Make it again to pick up where it stopped — nothing already made is paid for twice.`);
     }
@@ -862,3 +866,50 @@ loadMe();
 loadFeatures();
 loadSeries();
 loadLibrary();
+
+// ── the same work on every device: a story started on the Mac shows its progress on the iPad and iPhone too ──
+const JOB_NAMES = { remaster: "Remaking the audio", rewrite: "Rewriting" };
+const seenDone = new Set();
+async function checkActive() {
+  if (document.hidden) return;
+  const r = await api("/api/jobs/active");
+  if (!r.ok) return;
+  const others = [];
+  for (const j of r.jobs) {
+    const live = j.state === "running" || j.state === "queued";
+    if (j.kind === "make") {
+      if (live && !followingId && $("priceView").hidden) {        // pick up a story started somewhere else
+        const info = j.info || {};
+        setLamps(j.step || "writing", info.mode || "story", info.book);
+        $("progressTitle").textContent = j.title || "Working on it";
+        resetPreview();
+        setMeter(j.progress || 0, j.detail || "Getting started…");
+        show("progressView");
+        poll(j.id, { mode: info.mode || "story", book: !!info.book });
+      }
+      if (!live && !seenDone.has(j.id)) { seenDone.add(j.id); if (j.id !== followingId) loadLibrary(); }
+    } else if (live) {
+      others.push(j);
+    } else if (!seenDone.has(j.id)) {
+      seenDone.add(j.id); loadLibrary();
+    }
+  }
+  const box = $("activeJobs");
+  box.replaceChildren(...others.map((j) => {
+    const row = document.createElement("div"); row.className = "active-job";
+    const what = document.createElement("span"); what.className = "aj-what";
+    what.textContent = `${JOB_NAMES[j.kind] || "Working"}${j.storyTitle ? `: ${j.storyTitle}` : ""}`;
+    const bar = document.createElement("div"); bar.className = "meter";
+    const fill = document.createElement("div"); fill.className = "meter-fill"; fill.style.width = `${j.progress || 0}%`;
+    bar.appendChild(fill);
+    const det = document.createElement("span"); det.className = "aj-detail";
+    det.textContent = `${j.progress || 0}%${j.detail ? ` · ${j.detail}` : ""}`;
+    row.append(what, bar, det);
+    return row;
+  }));
+  box.hidden = !others.length;
+}
+checkActive();
+setInterval(checkActive, 6000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkActive(); });
+window.addEventListener("focus", checkActive);

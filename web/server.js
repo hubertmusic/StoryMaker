@@ -54,6 +54,24 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, kind TEXT, story_id TEXT,
     created TEXT NOT NULL DEFAULT (datetime('now')));
 `);
+try { db.exec("ALTER TABLE jobs ADD COLUMN info TEXT"); } catch { /* already there */ }
+// StoryMaker just started, so nothing is being made yet: work that was cut off by a restart or an update shows
+// as stopped (and Make it again carries on from where it was), not as running forever.
+try {
+  const jd = path.join(OUTPUT_DIR, ".jobs");
+  for (const name of fs.readdirSync(jd)) {
+    if (!name.endsWith(".status.json")) continue;
+    const f = path.join(jd, name);
+    try {
+      const st = JSON.parse(fs.readFileSync(f, "utf8"));
+      if (st.state === "running" || st.state === "queued") {
+        st.state = "failed";
+        st.error = "StoryMaker was restarted while this was being made.";
+        fs.writeFileSync(f, JSON.stringify(st));
+      }
+    } catch { /* unreadable: leave it */ }
+  }
+} catch { /* no jobs yet */ }
 const hashPw = (pw, salt) => crypto.scryptSync(String(pw), salt, 32).toString("hex");
 const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 
@@ -267,7 +285,10 @@ app.post("/api/make", async (req, res) => {
   if (e) return res.json({ ok: false, error: e });
   if (!req.body.series && !idea(req.body).trim()) return res.json({ ok: false, error: "Type what the story should be about first." });
   const r = await runStorymaker(req.user, [...buildArgs(req.body), "--yes", "--background"], idea(req.body));
-  if (r.ok && r.job_id) db.prepare("INSERT OR REPLACE INTO jobs (id, user_id, kind) VALUES (?, ?, 'make')").run(r.job_id, req.user.id);
+  if (r.ok && r.job_id) {
+    const info = JSON.stringify({ mode: req.body.mode || "story", book: !!req.body.book, idea: idea(req.body).slice(0, 140) });
+    db.prepare("INSERT OR REPLACE INTO jobs (id, user_id, kind, info) VALUES (?, ?, 'make', ?)").run(r.job_id, req.user.id, info);
+  }
   res.json(r);
 });
 
@@ -286,6 +307,30 @@ app.get("/api/status/:id", (req, res) => {
       db.prepare("SELECT user_id FROM jobs WHERE id = ?").get(id).user_id);
   }
   res.json(st);
+});
+
+// Everything this person has running, so every device they're signed in on shows it (Mac, iPad, iPhone…).
+// A job that hasn't reported anything for an hour has stopped (the Mac restarted, say) and isn't shown.
+app.get("/api/jobs/active", (req, res) => {
+  const rows = db.prepare("SELECT * FROM jobs WHERE user_id = ? AND created > datetime('now', '-3 days') ORDER BY created DESC")
+    .all(req.user.id);
+  const jobs = [];
+  for (const j of rows) {
+    const f = path.join(OUTPUT_DIR, ".jobs", `${j.id}.status.json`);
+    let st, age;
+    try { st = JSON.parse(fs.readFileSync(f, "utf8")); age = Date.now() - fs.statSync(f).mtimeMs; } catch { continue; }
+    const live = (st.state === "running" || st.state === "queued") && age < 60 * 60 * 1000;
+    const justDone = (st.state === "done" || st.state === "failed") && age < 10 * 60 * 1000;
+    if (!live && !justDone) continue;
+    let info = {};
+    try { info = JSON.parse(j.info || "{}"); } catch { /* old row */ }
+    let storyTitle = null;
+    if (j.story_id) storyTitle = (readResult(j.story_id) || {}).title || null;
+    jobs.push({ id: j.id, kind: j.kind, storyId: j.story_id, storyTitle, info, state: st.state, step: st.step || null,
+      progress: st.progress || 0, detail: st.detail || "", title: st.title || null, error: st.error || null,
+      runId: st.result && st.result.run_id || null, updated: Math.round(age / 1000) });
+  }
+  res.json({ ok: true, jobs });
 });
 
 // Preview pictures of a story that's still being made (small JPEGs in its work folder).

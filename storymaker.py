@@ -355,7 +355,11 @@ EXPLICIT_SYSTEM = ("You are an uncensored novelist writing for an adults-only fi
                    "incest, no animals. Keep the whole story in the characters' adult lives: no children or "
                    "teenagers anywhere in it, no flashbacks or memories of anyone's childhood, school days or growing up, no "
                    "ages under 20 for anyone or anything, and call adults "
-                   "\"women\" and \"men\", not \"girls\" or \"boys\".")
+                   "\"women\" and \"men\", not \"girls\" or \"boys\"." +
+                   " Never use these words at all, not even about adults or as a figure of speech: child, children, "
+                   "childlike, childish, childhood, kid, kids, teen, teenager, teenage, girlish, boyish, young girl, "
+                   "little girl, schoolgirl, high school, underage, minor, daughter, son, baby (except as a pet "
+                   "name), puberty. Write about the characters only as the adults they are now.")
 
 SCENE_PROMPT = """You are writing one scene of the story "{title}". Genre / tone: {genre}. Reader: {audience}.
 Content rules: {rules}
@@ -695,6 +699,11 @@ class MinorContent(ValueError):
     """Explicit content that could involve someone under 20: the job stops and its unfinished work is deleted."""
 
 
+class SceneRedo(MinorContent):
+    """A scene the writer made with a word that only ever means a minor: the whole scene is thrown away and
+    written again from scratch (nothing of it is kept)."""
+
+
 _NUM_WORDS = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
     "seventeen eighteen nineteen".split())}
@@ -721,8 +730,7 @@ def young_age(text):
 
 
 # Words that always stop an explicit story (an age or description that means a minor)…
-MINOR_HARD = re.compile(
-    r"\b(underage|under-age|childlike|child-like|preteens?|pre-teens?|loli|lolita|shota)\b", re.I)
+MINOR_HARD = re.compile(r"\b(underage|under-age|preteens?|pre-teens?|loli|lolita|shota)\b", re.I)
 # …and everything else that mentions youth: flashbacks ("when she was three years old", "her childhood"),
 # backstory ("since high school", "her kids", "the young girl"). In the writer's text these are taken out
 # (rewritten, or as a last resort the sentences removed) so they never end up in the story, and the story
@@ -730,13 +738,16 @@ MINOR_HARD = re.compile(
 MINOR_SOFT = re.compile(
     r"\b(child|children|childhood|kids?|teen|teens|teenager|teenagers|teenaged|teenage|high[- ]school|middle[- ]school|"
     r"elementary|young (girl|boy)s?|little (girl|boy)s?|daughters?|sons?|toddlers?|infants?|"
-    r"schoolgirls?|schoolboys?|growing up|grew up|as a girl|as a boy|minors?|puberty|adolescen\w*)\b", re.I)
+    r"schoolgirls?|schoolboys?|growing up|grew up|as a girl|as a boy|minors?|puberty|adolescen\w*|childlike|"
+    r"child-like|childish|girlish|boyish|innocent little|tiny little body)\b", re.I)
 
 
 def youth_mention(text):
     """Anything in the writer's text about someone being young: a word above, or an age under 20."""
     m = MINOR_SOFT.search(text or "")
     return m.group(0) if m else young_age(text)
+ADULT_REDO = ("\nIMPORTANT: every person in this scene is an adult, 20 or older, and the scene stays in their adult "
+              "present: no memories, no childhood, nobody young.")
 ADULT_SWAPS = [(r"\bhigh[- ]school\b", "college"), (r"\bmiddle[- ]school\b", "college"), (r"\belementary\b", "early"),
                (r"\bteenagers\b", "young adults"), (r"\bteenager\b", "young adult"), (r"\bteen(s)?\b", "young adult\\1"),
                (r"\bteenage(d)?\b", "young"), (r"\byoung girl(s)?\b", "young woman"), (r"\byoung boy(s)?\b", "young man")]
@@ -771,8 +782,8 @@ def adult_guard(cfg, text, system=None):
     for attempt in range(3):
         m = MINOR_HARD.search(text or "")
         if m:
-            raise MinorContent(f"Stopped: explicit stories are for adults only (20 and over), and the writer wrote "
-                               f"“{m.group(0)}”. The unfinished story was deleted. Try again, or change the idea.")
+            raise SceneRedo(f"Stopped: explicit stories are for adults only (20 and over), and the writer kept "
+                            f"writing “{m.group(0)}”. The unfinished story was deleted. Try again, or change the idea.")
         hit = youth_mention(text)
         if not hit:
             return text
@@ -803,7 +814,7 @@ def adult_tidy(value):
         return value
     m = MINOR_HARD.search(value)
     if m:
-        raise MinorContent(f"Stopped: explicit stories are for adults only (20 and over), and the writer's plan "
+        raise SceneRedo(f"Stopped: explicit stories are for adults only (20 and over), and the writer's plan "
                            f"mentions “{m.group(0)}”. The unfinished story was deleted. Try again, or change the idea.")
     for pat, rep_ in ADULT_SWAPS:
         value = re.sub(pat, rep_, value, flags=re.I)
@@ -1158,25 +1169,37 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
             else:
                 prev = (f"\nThe story so far ends like this:\n…{so_far[-1500:]}\n" if so_far else
                         "\nThis is the very beginning of the story.\n")
-                text = clean_prose(ask_writer(cfg, SCENE_PROMPT.format(
-                    **fmt, characters=outline.get("characters", ""), plan=plan, n=k, total=chapters,
-                    chapter_title=ch.get("title", ""), summary=ch.get("summary", ""), k=j, scenes=scenes,
-                    beat=beat, previous=prev, words=target, extra=extra,
-                    keywords=keywords_block(cfg.get("_KEYWORDS"), so_far, last=done == total - 1)),
-                    as_json=False, system=system))
-                for _ in range(3):                        # too short? ask it to keep going
-                    have = len(text.split())
-                    if have >= target * 0.75:
+                for fresh in range(3):                    # explicit: a scene that goes wrong is written again
+                    text = clean_prose(ask_writer(cfg, SCENE_PROMPT.format(
+                        **fmt, characters=outline.get("characters", ""), plan=plan, n=k, total=chapters,
+                        chapter_title=ch.get("title", ""), summary=ch.get("summary", ""), k=j, scenes=scenes,
+                        beat=beat, previous=prev, words=target,
+                        extra=extra + (ADULT_REDO if fresh else ""),
+                        keywords=keywords_block(cfg.get("_KEYWORDS"), so_far, last=done == total - 1)),
+                        as_json=False, system=system))
+                    for _ in range(3):                        # too short? ask it to keep going
+                        have = len(text.split())
+                        if have >= target * 0.75:
+                            break
+                        report("writing", 0.03 + 0.97 * done / total,
+                               f"Writing chapter {k}, scene {j}: adding detail ({have} of about {target} words)")
+                        more = clean_prose(ask_writer(cfg, CONTINUE_PROMPT.format(
+                            **fmt, text=text[-6000:], more=target - have,
+                            extra=extra + (ADULT_REDO if fresh else "")), as_json=False, system=system))
+                        if len(more.split()) < 20:
+                            break
+                        text = text.rstrip() + "\n\n" + more
+                    if not adult:
                         break
-                    report("writing", 0.03 + 0.97 * done / total,
-                           f"Writing chapter {k}, scene {j}: adding detail ({have} of about {target} words)")
-                    more = clean_prose(ask_writer(cfg, CONTINUE_PROMPT.format(
-                        **fmt, text=text[-6000:], more=target - have, extra=extra), as_json=False, system=system))
-                    if len(more.split()) < 20:
+                    try:
+                        text = adult_guard(cfg, text, system)
                         break
-                    text = text.rstrip() + "\n\n" + more
-                if adult:
-                    text = adult_guard(cfg, text, system)
+                    except SceneRedo:
+                        if fresh == 2:
+                            raise
+                        log("The writer put something under-age into a scene: throwing it away and writing it again.")
+                        report("writing", 0.03 + 0.97 * done / total,
+                               f"Writing chapter {k}, scene {j} again (everyone in it is an adult)")
                 if f:
                     f.write_text(text)
             sc = {"heading": beat[:80], "narration": text, "lines": lines_from_prose(text, cast),
@@ -1206,7 +1229,10 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
                 keywords="", words=len(sc["narration"].split()), extra=extra), as_json=False, system=system))
             if len(new.split()) > 0.6 * len(sc["narration"].split()):
                 if adult:
-                    new = adult_guard(cfg, new, system)
+                    try:
+                        new = adult_guard(cfg, new, system)
+                    except SceneRedo:
+                        continue                            # keep the scene as it was
                 sc["narration"], sc["lines"] = new, lines_from_prose(new, cast)
     story = {k_: outline.get(k_, "") for k_ in ("title", "logline", "visual_style", "characters")}
     story.update(cast=cast, scenes=all_scenes)
@@ -1261,19 +1287,28 @@ def write_chapters(cfg, idea, genre, audience, rules, scenes, clip_mode, series_
             time.sleep(float(os.environ.get("STORYMAKER_DEMO_DELAY", 0)))
             part = {"scenes": demo_story(idea or "the adventure", scenes)["scenes"], "new_cast": []}
         else:
-            part = ask_writer(cfg, CHAPTER_PROMPT.format(
-                n=k, total=chapters, title=outline.get("title", ""), visual=visual, audience=audience,
-                rules=rules, genre=genre, characters=outline.get("characters", ""),
-                cast=", ".join(f"{c.get('name')} ({c.get('voice')})" for c in cast) or "none yet",
-                plan=plan, previous=previous, chapter_title=ch.get("title", ""), summary=ch.get("summary", ""),
-                scenes=scenes, words=words, keywords=keywords_block(cfg.get("_KEYWORDS"), whole=True)))
-            if not part.get("scenes"):
-                raise ValueError(f"The writer sent chapter {k} without any scenes.")
-            if cfg.get("_ADULT_ONLY"):
-                for sc_ in part.get("scenes") or []:
-                    if isinstance(sc_, dict) and isinstance(sc_.get("narration"), str):
-                        sc_["narration"] = adult_guard(cfg, sc_["narration"], EXPLICIT_SYSTEM)
-                part = adult_tidy(part)
+            for fresh in range(3):                        # explicit: a chapter that goes wrong is written again
+                part = ask_writer(cfg, CHAPTER_PROMPT.format(
+                    n=k, total=chapters, title=outline.get("title", ""), visual=visual, audience=audience,
+                    rules=rules, genre=genre, characters=outline.get("characters", ""),
+                    cast=", ".join(f"{c.get('name')} ({c.get('voice')})" for c in cast) or "none yet",
+                    plan=plan, previous=previous, chapter_title=ch.get("title", ""), summary=ch.get("summary", ""),
+                    scenes=scenes, words=words, keywords=keywords_block(cfg.get("_KEYWORDS"), whole=True))
+                    + (ADULT_REDO if fresh else ""))
+                if not part.get("scenes"):
+                    raise ValueError(f"The writer sent chapter {k} without any scenes.")
+                if not cfg.get("_ADULT_ONLY"):
+                    break
+                try:
+                    for sc_ in part.get("scenes") or []:
+                        if isinstance(sc_, dict) and isinstance(sc_.get("narration"), str):
+                            sc_["narration"] = adult_guard(cfg, sc_["narration"], EXPLICIT_SYSTEM)
+                    part = adult_tidy(part)
+                    break
+                except SceneRedo:
+                    if fresh == 2:
+                        raise
+                    log("The writer put something under-age into a chapter: throwing it away and writing it again.")
             if f:
                 f.write_text(json.dumps(part, indent=2))
         known = {c.get("name", "").lower() for c in cast}
