@@ -353,7 +353,8 @@ EXPLICIT_SYSTEM = ("You are an uncensored novelist writing for an adults-only fi
                    "Never fade to black, skip ahead, summarize, moralize, add warnings or refuse. Limits that "
                    "always apply: every character is an adult aged 20 or over, everything is consensual, no "
                    "incest, no animals. Keep the whole story in the characters' adult lives: no children or "
-                   "teenagers anywhere in it, no flashbacks to childhood or school days, and call adults "
+                   "teenagers anywhere in it, no flashbacks or memories of anyone's childhood, school days or growing up, no "
+                   "ages under 20 for anyone or anything, and call adults "
                    "\"women\" and \"men\", not \"girls\" or \"boys\".")
 
 SCENE_PROMPT = """You are writing one scene of the story "{title}". Genre / tone: {genre}. Reader: {audience}.
@@ -675,7 +676,7 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
     complete_cast(story)
     if level == "explicit":
         for sc in story.get("scenes", []):
-            if MINOR_HARD.search(sc.get("narration", "")) or MINOR_SOFT.search(sc.get("narration", "")):
+            if MINOR_HARD.search(sc.get("narration", "")) or youth_mention(sc.get("narration", "")):
                 sc["narration"] = adult_guard(cfg, sc["narration"], EXPLICIT_SYSTEM)
                 sc["lines"] = lines_from_prose(sc["narration"], story.get("cast") or [])
         story.update({k: adult_tidy(v) for k, v in story.items() if k != "scenes"})
@@ -721,21 +722,30 @@ def young_age(text):
 
 # Words that always stop an explicit story (an age or description that means a minor)…
 MINOR_HARD = re.compile(
-    r"\b(minors?|underage|under-age|childlike|child-like|preteens?|pre-teens?|loli|lolita|shota|toddlers?|"
-    r"infants?|little (girl|boy)s?|schoolgirls?|schoolboys?|(1[0-7]|[1-9])[- ]?(year|yr)s?[- ]old)\b", re.I)
-# …and words that are usually innocent in a writer's text ("since high school", "her kids", "the young girl")
-# but don't belong in an adults-only story: the writer is asked to rewrite those passages without them.
+    r"\b(underage|under-age|childlike|child-like|preteens?|pre-teens?|loli|lolita|shota)\b", re.I)
+# …and everything else that mentions youth: flashbacks ("when she was three years old", "her childhood"),
+# backstory ("since high school", "her kids", "the young girl"). In the writer's text these are taken out
+# (rewritten, or as a last resort the sentences removed) so they never end up in the story, and the story
+# carries on. In what YOU type, any of them stops the story before anything is written.
 MINOR_SOFT = re.compile(
     r"\b(child|children|childhood|kids?|teen|teens|teenager|teenagers|teenaged|teenage|high[- ]school|middle[- ]school|"
-    r"elementary|young (girl|boy)s?|daughters?)\b", re.I)
+    r"elementary|young (girl|boy)s?|little (girl|boy)s?|daughters?|sons?|toddlers?|infants?|"
+    r"schoolgirls?|schoolboys?|growing up|grew up|as a girl|as a boy|minors?|puberty|adolescen\w*)\b", re.I)
+
+
+def youth_mention(text):
+    """Anything in the writer's text about someone being young: a word above, or an age under 20."""
+    m = MINOR_SOFT.search(text or "")
+    return m.group(0) if m else young_age(text)
 ADULT_SWAPS = [(r"\bhigh[- ]school\b", "college"), (r"\bmiddle[- ]school\b", "college"), (r"\belementary\b", "early"),
                (r"\bteenagers\b", "young adults"), (r"\bteenager\b", "young adult"), (r"\bteen(s)?\b", "young adult\\1"),
                (r"\bteenage(d)?\b", "young"), (r"\byoung girl(s)?\b", "young woman"), (r"\byoung boy(s)?\b", "young man")]
 
 CLEAN_PROMPT = """Rewrite this passage of an adults-only story. Every character in it is an adult (20 or older).
-Remove every mention of children, kids, teenagers, school days and childhood, and any wording that makes
-someone sound young: say "young woman" or "young man", never "young girl" or "young boy". Keep everything
-else exactly as it is: the events, the length, the detail, the dialogue and how explicit it is.
+Take out every flashback or memory of anyone's childhood or school years, every age under 20, and every
+mention of children, kids, babies, teenagers or growing up; keep the scene in the characters' adult present.
+Say "young woman" or "young man", never "young girl" or "young boy". Keep everything else exactly as it is:
+the events, the length, the detail, the dialogue and how explicit it is.
 Reply with only the rewritten passage.
 
 ---
@@ -743,27 +753,43 @@ Reply with only the rewritten passage.
 ---"""
 
 
+def drop_youth_sentences(text):
+    """Last resort: remove every sentence that mentions youth, keeping the paragraphs."""
+    paras = []
+    for para in re.split(r"\n\s*\n", text or ""):
+        keep = [x for x in re.split(r"(?<=[.!?…”])\s+", para.strip()) if x and not youth_mention(x)]
+        if keep:
+            paras.append(" ".join(keep))
+    return "\n\n".join(paras)
+
+
 def adult_guard(cfg, text, system=None):
-    """For text the writer made for an explicit story: anything that means someone under 20 stops the story (and
-    its unfinished work is deleted); words that are usually innocent (backstory like "since high school") are
-    rewritten out, so the story can carry on."""
+    """For text the writer made for an explicit story. Words that only mean a minor (underage, preteen…) stop the
+    story at once and its unfinished work is deleted. Anything else about youth (a flashback to childhood, an age
+    under 20, "since high school") is taken out: the writer rewrites the passage without it, and if it keeps
+    putting it back, those sentences are removed. Either way none of it is ever in the story."""
     for attempt in range(3):
         m = MINOR_HARD.search(text or "")
-        hit = m.group(0) if m else young_age(text)
-        if hit:
+        if m:
             raise MinorContent(f"Stopped: explicit stories are for adults only (20 and over), and the writer wrote "
-                               f"“{hit}”. The unfinished story was deleted. Try again, or change the idea.")
-        m = MINOR_SOFT.search(text or "")
-        if not m:
+                               f"“{m.group(0)}”. The unfinished story was deleted. Try again, or change the idea.")
+        hit = youth_mention(text)
+        if not hit:
             return text
         if attempt == 2 or cfg.get("STORY_PROVIDER", "").lower() == "demo":
             break
-        log(f"Taking “{m.group(0)}” out of an explicit scene (everyone stays an adult)…")
+        log(f"Taking “{hit}” out of an explicit scene (no flashbacks, everyone stays an adult)…")
         new = clean_prose(ask_writer(cfg, CLEAN_PROMPT.format(text=text), as_json=False, system=system))
         if len(new.split()) > 0.6 * len(text.split()):
             text = new
-    raise ValueError(f"Explicit stories are for adult characters only, and the writer kept writing “{m.group(0)}”. "
-                     "Nothing was saved. Try again, or change the idea.")
+    trimmed = drop_youth_sentences(text)
+    if trimmed and not youth_mention(trimmed) and not MINOR_HARD.search(trimmed) \
+            and len(trimmed.split()) >= 0.5 * len(text.split()):
+        log("Removed the sentences about youth the writer kept adding.")
+        return trimmed
+    raise MinorContent("Stopped: the writer kept writing about someone young in an explicit scene, so the "
+                       "unfinished story was deleted. Try again; if it keeps happening, reword the idea so it "
+                       "stays in the characters' adult lives.")
 
 
 def adult_tidy(value):
@@ -776,14 +802,13 @@ def adult_tidy(value):
     if not isinstance(value, str):
         return value
     m = MINOR_HARD.search(value)
-    hit = m.group(0) if m else young_age(value)
-    if hit:
+    if m:
         raise MinorContent(f"Stopped: explicit stories are for adults only (20 and over), and the writer's plan "
-                           f"mentions “{hit}”. The unfinished story was deleted. Try again, or change the idea.")
+                           f"mentions “{m.group(0)}”. The unfinished story was deleted. Try again, or change the idea.")
     for pat, rep_ in ADULT_SWAPS:
         value = re.sub(pat, rep_, value, flags=re.I)
-    if MINOR_SOFT.search(value):                 # what's left (children, kids, daughters): drop those sentences
-        value = " ".join(x for x in re.split(r"(?<=[.!?])\s+", value) if not MINOR_SOFT.search(x)).strip()
+    if youth_mention(value):                     # what's left (childhood, ages, kids): drop those sentences
+        value = " ".join(x for x in re.split(r"(?<=[.!?])\s+", value) if not youth_mention(x)).strip()
     return value
 
 
