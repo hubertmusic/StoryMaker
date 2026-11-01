@@ -644,28 +644,74 @@ def _clip(text, n):
     return text[:n] + ("…" if len(text) > n else "")
 
 
+KIDS_LEVELS = ("young-kids", "kids", "middle-grade", "family")
+PROFILE_RANK = {"kids": 0, "everyday": 1, "grown": 2}
+# what never goes into a gentler story's style guide: swearing, crude words, anything sexual or suggestive
+CRUDE = re.compile(
+    r"\b(fuck\w*|shit\w*|damn\w*|goddamn\w*|hell|bitch\w*|bastard\w*|asshole\w*|ass|arse\w*|crap\w*|piss\w*|"
+    r"cunt\w*|dick\w*|cock\w*|pussy|pussies|tits?|titties|boob\w*|cum\w*|sex\w*|naked|nude\w*|nipple\w*|"
+    r"breasts?|orgasm\w*|moan\w*|thrust\w*|erect\w*|clit\w*|genital\w*|penis\w*|vagina\w*|horny|arous\w*|"
+    r"lust\w*|seduc\w*|sensual\w*|erotic\w*|kinky|kink|foreplay|lick\w*|suck\w*|wet|hard-on|aroused|"
+    r"bed(?:room)? scene|explicit|steamy|sultry|naughty|filth\w*|dirty|raunch\w*|smut\w*|teas\w*|kiss\w*|"
+    r"grind\w*|straddl\w*|undress\w*|strip\w*|panties|bra|lingerie|bdsm|spank\w*)\b", re.I)
+
+
+def profile_for(level):
+    return "grown" if level in GROWN_UP else "kids" if level in KIDS_LEVELS else "everyday"
+
+
+def soften(text):
+    """Keep the words, phrasing and tone, without anything crude, sexual or suggestive."""
+    parts = re.split(r"(?<=[.!?…;])\s+|\n+|,\s*", str(text or ""))
+    return ", ".join(p.strip() for p in parts if p.strip() and not CRUDE.search(p)) if CRUDE.search(text or "") \
+        else str(text or "")
+
+
 def style_block(style, level):
     """The reader's own writing style, for every writing prompt: their notes, what they said about earlier stories,
-    and passages to match. Grown-up stories use the grown-up profile; everything else the everyday one."""
-    w = ((style or {}).get("writing") or {}).get("grown" if level in GROWN_UP else "everyday") or {}
+    and passages to match. Each style is marked for kids & family, teens & adults, or grown-up stories. A style can
+    also be shared with the other kinds; used for a gentler story than it was made for, it's made gentler: the same
+    voice and words, but nothing crude, sexual or suggestive, and no swearing (and for kids, no passages at all)."""
+    profiles = ((style or {}).get("writing") or {})
+    own = profile_for(level)
     adult_only = level == "explicit"
     ok = lambda t: not (adult_only and (young_age(t) or MINOR_WORDS.search(t)))    # nothing young, ever
-    lines = []
-    if w.get("tone") and ok(w["tone"]):
-        lines.append(f"- Tone, voice and feel: {_clip(w['tone'], 600)}")
-    if w.get("use") and ok(w["use"]):
-        lines.append(f"- Words, phrasing and things the reader wants used: {_clip(w['use'], 500)}")
-    if w.get("avoid"):
-        lines.append(f"- Never use or do: {_clip(w['avoid'], 400)}")
-    fb = [f for f in (w.get("feedback") or [])[-10:] if f.get("notes") and ok(f["notes"])]
-    for f in fb:
-        how = {"up": "liked", "down": "didn't like"}.get(f.get("rating"), "said")
-        about = f" ({_clip(f.get('title'), 60)})" if f.get("title") else ""
-        lines.append(f"- About an earlier story{about}, the reader {how}: {_clip(f['notes'], 300)}")
-    refs = [r for r in (w.get("references") or []) if str(r).strip() and ok(r)][-3:]
+    lines, refs, softened = [], [], False
+    order = [own] + [k for k in ("grown", "everyday", "kids") if k != own]
+    for name in order:
+        w = profiles.get(name) or {}
+        if name != own and not w.get("share", True):
+            continue
+        gentler = PROFILE_RANK.get(name, 1) > PROFILE_RANK[own]            # made for stronger stories than this one
+        fix = soften if gentler else (lambda t: t)
+        tag = "" if name == own else " (from your style for other stories)"
+        tone, use = fix(w.get("tone") or ""), fix(w.get("use") or "")
+        if tone.strip() and ok(tone):
+            lines.append(f"- Tone, voice and feel{tag}: {_clip(tone, 600)}")
+        if use.strip() and ok(use):
+            lines.append(f"- Words, phrasing and things the reader wants used{tag}: {_clip(use, 500)}")
+        if w.get("avoid"):
+            lines.append(f"- Never use or do: {_clip(w['avoid'], 400)}")
+        for f in (w.get("feedback") or [])[-(10 if name == own else 4):]:
+            note = fix(f.get("notes") or "")
+            if note.strip() and ok(note):
+                how = {"up": "liked", "down": "didn't like"}.get(f.get("rating"), "said")
+                about = f" ({_clip(f.get('title'), 60)})" if f.get("title") and name == own else ""
+                lines.append(f"- About an earlier story{about}, the reader {how}: {_clip(note, 300)}")
+        if not (gentler and own == "kids"):                                    # kids never get grown-up passages
+            for r in (w.get("references") or [])[-(3 if name == own else 1):]:
+                r2 = fix(r)
+                if r2.strip() and len(r2.split()) > 12 and ok(r2):
+                    refs.append(r2)
+        softened = softened or (gentler and bool(tone.strip() or use.strip() or refs))
+    refs = refs[:3]
     if not lines and not refs:
         return ""
     out = "\nThe reader's own style guide (follow it closely; it comes before your usual habits):\n" + "\n".join(lines)
+    if softened:
+        out += ("\n- Some of this style was made for other kinds of stories. Use its voice, rhythm, phrasing and "
+                "words, but keep this story right for its reader: no swearing, nothing crude, nothing sexual or "
+                "suggestive; where the style would go there, keep it clean and warm instead.")
     if refs:
         out += ("\nPassages the reader loves. Match their voice, rhythm, sentence length, vocabulary, dialogue and "
                 "way of describing things, but never copy their events, names or sentences:\n" +

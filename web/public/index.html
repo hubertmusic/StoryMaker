@@ -320,11 +320,15 @@
     </fieldset>
 
     <section class="style-pane" data-pane="writing">
-      <fieldset class="choice" id="profileRow">
-        <legend>Which stories</legend>
-        <label><input type="radio" name="sprof" value="everyday" checked> Everyday stories</label>
-        <label id="grownProf"><input type="radio" name="sprof" value="grown"> Grown-up (Mature &amp; Explicit)</label>
+      <fieldset class="choice three-col" id="profileRow">
+        <legend>Which stories this style is for</legend>
+        <label><input type="radio" name="sprof" value="kids"> Kids &amp; family</label>
+        <label><input type="radio" name="sprof" value="everyday" checked> Teens &amp; adults</label>
+        <label id="grownProf"><input type="radio" name="sprof" value="grown"> Grown-up: Mature &amp; Explicit</label>
       </fieldset>
+      <label class="check share-check"><input type="checkbox" id="stShare" checked> Also use this style for the other kinds of stories</label>
+      <p class="level-note" id="shareNote">Used for gentler stories than it's made for, it's softened automatically: the same voice,
+        rhythm and words, but no swearing, nothing crude, sexual or suggestive. Kids' stories never get grown-up passages.</p>
       <label for="stTone">Tone, voice and feel</label>
       <textarea id="stTone" rows="3" placeholder="Warm and witty, close to the main character's thoughts; short punchy sentences in action, long flowing ones in quiet moments."></textarea>
       <label for="stUse">Words, phrasing and things to use</label>

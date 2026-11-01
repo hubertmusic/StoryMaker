@@ -468,7 +468,7 @@ const str = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
 function cleanProfile(p) {
   p = p || {};
   return {
-    tone: str(p.tone, 1500), use: str(p.use, 1200), avoid: str(p.avoid, 800),
+    tone: str(p.tone, 1500), use: str(p.use, 1200), avoid: str(p.avoid, 800), share: p.share !== false,
     references: (Array.isArray(p.references) ? p.references : []).map((r) => str(r, 4000)).filter((r) => r.trim()).slice(-5),
     feedback: (Array.isArray(p.feedback) ? p.feedback : []).filter((f) => f && typeof f === "object").map((f) => ({
       rating: ["up", "down"].includes(f.rating) ? f.rating : "", notes: str(f.notes, 800), title: str(f.title, 120),
@@ -483,7 +483,7 @@ app.post("/api/style", (req, res) => {
   const b = req.body || {};
   const w = b.writing || {};
   const data = {
-    writing: { everyday: cleanProfile(w.everyday), grown: cleanProfile(w.grown) },
+    writing: { kids: cleanProfile(w.kids), everyday: cleanProfile(w.everyday), grown: cleanProfile(w.grown) },
     pictures: { style: str((b.pictures || {}).style, 600), avoid: str((b.pictures || {}).avoid, 400) },
     video: { style: str((b.video || {}).style, 600) },
     sounds: { like: str((b.sounds || {}).like, 600), avoid: str((b.sounds || {}).avoid, 400) },
@@ -498,7 +498,8 @@ app.post("/api/stories/:id/feedback", (req, res) => {
   const id = guard(req, res); if (!id) return;
   const b = req.body || {};
   const r = readResult(id) || {};
-  const prof = ["mature", "explicit"].includes(r.level) ? "grown" : "everyday";
+  const prof = ["mature", "explicit"].includes(r.level) ? "grown"
+    : ["young-kids", "kids", "middle-grade", "family"].includes(r.level) ? "kids" : "everyday";
   const st = styleFor(req.user);
   st.writing = st.writing || {};
   const p = cleanProfile(st.writing[prof]);

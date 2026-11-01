@@ -372,3 +372,8 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .style-body .row .go { width: auto; margin: 0; }
 .small-btn.on { background: var(--lamp); color: var(--lamp-ink); }
 @media (max-width: 560px) { .style-tabs { grid-template-columns: 1fr 1fr; } }
+.choice.three-col { grid-template-columns: repeat(3, 1fr); }
+.choice.three-col label { font-size: 15px; }
+.share-check { margin-top: 10px; }
+#shareNote { margin-top: 4px; }
+@media (max-width: 560px) { .choice.three-col { grid-template-columns: 1fr; } }

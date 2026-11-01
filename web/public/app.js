@@ -646,7 +646,7 @@ function storyTools(s, id, el) {
       const r = await api(`/api/stories/${encodeURIComponent(id)}/feedback`, { rating, notes: notes.value, passage: kc.checked ? passage.value : "" });
       go.disabled = false;
       msg.className = r.ok ? "settings-msg" : "settings-msg bad";
-      msg.textContent = r.ok ? `Saved to your ${r.profile === "grown" ? "grown-up" : "everyday"} style. The next stories will use it.` : (r.error || "Not saved.");
+      msg.textContent = r.ok ? `Saved to your ${{ grown: "grown-up", kids: "kids & family", everyday: "teens & adults" }[r.profile]} style. The next stories will use it.` : (r.error || "Not saved.");
       if (r.ok) { notes.value = ""; kc.checked = false; passage.hidden = true; }
     });
     p.append(chips, nl, notes, keep, passage, go, msg);
@@ -1013,12 +1013,13 @@ function profileData() {
 }
 function readProfileForm() {
   const w = profileData();
-  w.tone = $("stTone").value; w.use = $("stUse").value; w.avoid = $("stAvoid").value;
+  w.tone = $("stTone").value; w.use = $("stUse").value; w.avoid = $("stAvoid").value; w.share = $("stShare").checked;
   w.references = [...$("refList").querySelectorAll("textarea")].map((t) => t.value).filter((v) => v.trim());
 }
 function fillProfileForm() {
   const w = profileData();
   $("stTone").value = w.tone || ""; $("stUse").value = w.use || ""; $("stAvoid").value = w.avoid || "";
+  $("stShare").checked = w.share !== false;
   $("refList").innerHTML = "";
   (w.references || []).forEach((r) => addRef(r));
   const fb = $("fbList"); fb.innerHTML = "";
