@@ -1022,6 +1022,7 @@ function fillProfileForm() {
   $("stShare").checked = w.share !== false;
   $("refList").innerHTML = "";
   (w.references || []).forEach((r) => addRef(r));
+  if (!(w.references || []).length) addRef();                  // always one reference box ready to paste into
   const fb = $("fbList"); fb.innerHTML = "";
   if (!(w.feedback || []).length) fb.innerHTML = '<p class="level-note">Nothing yet. Use Feedback on a story you\'ve made.</p>';
   (w.feedback || []).forEach((f, i) => {
