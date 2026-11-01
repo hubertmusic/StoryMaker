@@ -28,6 +28,7 @@ function formData() {
     video: $("video").value,
     writer: $("writer").value,
     portrait: $("portrait").checked,
+    useStyle: $("useStyle").checked,
     book: $("book").checked,
   };
 }
@@ -526,7 +527,7 @@ function storyTools(s, id, el) {
     wrap.appendChild(o);
   }
   bar.append(btn("Edit the text", editPanel), btn("Rewrite with AI", rewritePanel));
-  bar.append(btn("Cast", castPanel));
+  bar.append(btn("Cast", castPanel), btn("Feedback", feedbackPanel));
   if (hasAudio) bar.append(btn("Voices", voicesPanel), btn("Sounds", soundsPanel), btn("Remake the audio", () => remakePanel(false)));
   bar.append(btn("Send to Audio Studio", () => {
     const base = features.studioUrl || `${location.protocol}//${location.hostname}:${location.protocol === "https:" ? 8443 : 8096}`;
@@ -612,6 +613,44 @@ function storyTools(s, id, el) {
       const m = jobMeter(); p.appendChild(m);
       followJob(r.job_id, m, () => refreshCard(id, el), (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });
     });
+  }
+
+  // tell the writer what worked and what didn't: it goes into your style for stories like this one
+  async function feedbackPanel() {
+    area.innerHTML = "";
+    const full = await api(`/api/stories/${encodeURIComponent(id)}/full`);
+    if (!full.ok) { area.textContent = full.error; return; }
+    const p = document.createElement("div"); p.className = "panel-tool";
+    p.innerHTML = '<h4>Feedback</h4><p class="level-note">What you liked or didn\'t about this story. The writer uses it for every story like this one from now on.</p>';
+    let rating = "";
+    const chips = document.createElement("div"); chips.className = "row";
+    const mkChip = (val, label) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "small-btn"; b.textContent = label;
+      b.addEventListener("click", () => { rating = rating === val ? "" : val; chips.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b && rating === val)); });
+      return b;
+    };
+    chips.append(mkChip("up", "More like this"), mkChip("down", "Less like this"));
+    const nl = document.createElement("label"); nl.textContent = "What to keep or change"; nl.htmlFor = `fb-${id}`;
+    const notes = document.createElement("textarea"); notes.id = `fb-${id}`; notes.rows = 3;
+    notes.placeholder = "Loved the slow build and the banter. Less description of rooms, more of what they feel. Dialogue sounded too formal.";
+    const keep = document.createElement("label"); keep.className = "check";
+    const kc = document.createElement("input"); kc.type = "checkbox";
+    keep.append(kc, document.createTextNode(" Also keep a passage from this story as writing to match"));
+    const passage = document.createElement("textarea"); passage.rows = 6; passage.hidden = true;
+    passage.value = (full.scenes[0] && full.scenes[0].narration || "").slice(0, 1500);
+    kc.addEventListener("change", () => { passage.hidden = !kc.checked; });
+    const go = document.createElement("button"); go.className = "go"; go.type = "button"; go.textContent = "Save feedback";
+    const msg = document.createElement("p"); msg.className = "settings-msg";
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      const r = await api(`/api/stories/${encodeURIComponent(id)}/feedback`, { rating, notes: notes.value, passage: kc.checked ? passage.value : "" });
+      go.disabled = false;
+      msg.className = r.ok ? "settings-msg" : "settings-msg bad";
+      msg.textContent = r.ok ? `Saved to your ${r.profile === "grown" ? "grown-up" : "everyday"} style. The next stories will use it.` : (r.error || "Not saved.");
+      if (r.ok) { notes.value = ""; kc.checked = false; passage.hidden = true; }
+    });
+    p.append(chips, nl, notes, keep, passage, go, msg);
+    area.appendChild(p);
   }
 
   async function castPanel() {
@@ -793,7 +832,57 @@ function showResult(r) {
 }
 
 // ── library ──
+// ── unfinished stories: never lost, from any device ──
+async function loadUnfinished() {
+  const r = await api("/api/jobs/unfinished");
+  const list = $("unfinishedList");
+  list.innerHTML = "";
+  const items = (r.ok && r.stories) || [];
+  $("unfinished").hidden = !items.length;
+  for (const u of items) {
+    const row = document.createElement("div"); row.className = "unfinished-row";
+    const info = document.createElement("div");
+    const t = document.createElement("div"); t.className = "uf-title"; t.textContent = u.title;
+    const m = document.createElement("div"); m.className = "uf-meta";
+    const when = new Date(u.started.replace(" ", "T") + "Z").toLocaleString();
+    m.textContent = `${u.written}${u.planned ? ` of ${u.planned}` : ""} scenes written · started ${when}`
+      + (u.level ? ` · ${LEVEL_NAMES[u.level] || u.level}` : "");
+    const why = document.createElement("div"); why.className = "uf-why"; why.textContent = u.error || "";
+    info.append(t, m, why);
+    const acts = document.createElement("div"); acts.className = "uf-actions";
+    const mk = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = label; b.addEventListener("click", fn); acts.appendChild(b); return b; };
+    if (u.canResume) mk("Recover", "small-btn go-small", async (e) => {
+      e.target.disabled = true;
+      const rr = await api(`/api/jobs/${u.id}/resume`, {});
+      e.target.disabled = false;
+      if (!rr.ok) return alert(rr.error || "Couldn't recover it.");
+      checkActive();                                       // the progress shows on this and every device
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      loadUnfinished();
+    });
+    if (u.written) mk("Read what's written", "small-btn", async () => {
+      const rr = await api(`/api/jobs/${u.id}/text`);
+      if (!rr.ok) return;
+      const body = $("viewerBody"); body.innerHTML = "";
+      const h = document.createElement("h3"); h.textContent = u.title;
+      const sub = document.createElement("p"); sub.className = "sub"; sub.textContent = `Unfinished: ${rr.written} scenes so far`;
+      const copy = document.createElement("button"); copy.type = "button"; copy.className = "small-btn"; copy.textContent = "Copy the text";
+      copy.addEventListener("click", () => { navigator.clipboard.writeText(rr.text).then(() => { copy.textContent = "Copied"; }); });
+      body.append(h, sub, copy, renderReader(rr.text));
+      $("viewer").showModal();
+    });
+    mk("Delete", "small-btn warn", async (e) => {
+      if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = "Delete it for good?"; return; }
+      await fetch(`/api/jobs/${u.id}`, { method: "DELETE" });
+      loadUnfinished();
+    });
+    row.append(info, acts);
+    list.appendChild(row);
+  }
+}
+
 async function loadLibrary() {
+  loadUnfinished();
   const r = await api("/api/stories");
   const filter = $("filter").value;
   const shelf = $("shelf");
@@ -913,3 +1002,72 @@ checkActive();
 setInterval(checkActive, 6000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkActive(); });
 window.addEventListener("focus", checkActive);
+
+// ── your style ──
+let styleData = null;
+function curProfile() { return document.querySelector('input[name="sprof"]:checked').value; }
+function profileData() {
+  styleData.writing = styleData.writing || {};
+  styleData.writing[curProfile()] = styleData.writing[curProfile()] || { references: [], feedback: [] };
+  return styleData.writing[curProfile()];
+}
+function readProfileForm() {
+  const w = profileData();
+  w.tone = $("stTone").value; w.use = $("stUse").value; w.avoid = $("stAvoid").value;
+  w.references = [...$("refList").querySelectorAll("textarea")].map((t) => t.value).filter((v) => v.trim());
+}
+function fillProfileForm() {
+  const w = profileData();
+  $("stTone").value = w.tone || ""; $("stUse").value = w.use || ""; $("stAvoid").value = w.avoid || "";
+  $("refList").innerHTML = "";
+  (w.references || []).forEach((r) => addRef(r));
+  const fb = $("fbList"); fb.innerHTML = "";
+  if (!(w.feedback || []).length) fb.innerHTML = '<p class="level-note">Nothing yet. Use Feedback on a story you\'ve made.</p>';
+  (w.feedback || []).forEach((f, i) => {
+    const row = document.createElement("div"); row.className = "fb-row";
+    const t = document.createElement("span");
+    t.textContent = `${f.rating === "up" ? "More like this" : f.rating === "down" ? "Less like this" : "Note"}${f.title ? ` (${f.title})` : ""}: ${f.notes}`;
+    const del = document.createElement("button"); del.type = "button"; del.className = "small-btn warn"; del.textContent = "Remove";
+    del.addEventListener("click", () => { w.feedback.splice(i, 1); fillProfileForm(); });
+    row.append(t, del); fb.appendChild(row);
+  });
+}
+function addRef(text = "") {
+  const box = document.createElement("div"); box.className = "ref-row";
+  const ta = document.createElement("textarea"); ta.rows = 5; ta.value = text; ta.placeholder = "Paste a few paragraphs of writing whose voice you want.";
+  ta.setAttribute("aria-label", "Passage to match");
+  const del = document.createElement("button"); del.type = "button"; del.className = "small-btn warn"; del.textContent = "Remove";
+  del.addEventListener("click", () => box.remove());
+  box.append(ta, del); $("refList").appendChild(box);
+}
+$("addRef").addEventListener("click", () => { if ($("refList").children.length < 5) addRef(); });
+document.querySelectorAll('input[name="stab"]').forEach((r) => r.addEventListener("change", () => {
+  document.querySelectorAll(".style-pane").forEach((p) => { p.hidden = p.dataset.pane !== r.value; });
+}));
+let lastProfile = "everyday";
+document.querySelectorAll('input[name="sprof"]').forEach((r) => r.addEventListener("change", () => {
+  const now = curProfile();
+  document.querySelector(`input[name="sprof"][value="${lastProfile}"]`).checked = true; readProfileForm();
+  document.querySelector(`input[name="sprof"][value="${now}"]`).checked = true; lastProfile = now; fillProfileForm();
+}));
+$("styleBtn").addEventListener("click", async () => {
+  const r = await api("/api/style");
+  styleData = (r.ok && r.style) || {};
+  $("grownProf").hidden = !r.grownUp;
+  document.querySelector('input[name="sprof"][value="everyday"]').checked = true; lastProfile = "everyday";
+  fillProfileForm();
+  $("stPic").value = (styleData.pictures || {}).style || ""; $("stPicAvoid").value = (styleData.pictures || {}).avoid || "";
+  $("stVid").value = (styleData.video || {}).style || "";
+  $("stSnd").value = (styleData.sounds || {}).like || ""; $("stSndAvoid").value = (styleData.sounds || {}).avoid || "";
+  $("styleMsg").textContent = "";
+  $("styleDlg").showModal();
+});
+$("styleSave").addEventListener("click", async () => {
+  readProfileForm();
+  styleData.pictures = { style: $("stPic").value, avoid: $("stPicAvoid").value };
+  styleData.video = { style: $("stVid").value };
+  styleData.sounds = { like: $("stSnd").value, avoid: $("stSndAvoid").value };
+  const r = await api("/api/style", styleData);
+  $("styleMsg").className = r.ok ? "settings-msg" : "settings-msg bad";
+  $("styleMsg").textContent = r.ok ? "Saved. Every story you make from now on uses it." : (r.error || "Not saved.");
+});

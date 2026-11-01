@@ -39,7 +39,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "1.6 (Oct 28)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "1.7 (Oct 30)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -1248,7 +1248,9 @@ def run_sounds(cfg, pid, progress=lambda f, d: None, redo=False):
     if p.get("sound_wishes"):
         story["sound_wishes"] = p["sound_wishes"]
     progress(0.1, "Designing the sound")
-    sm.plan_sounds(writer_cfg(cfg, p["level"]), story, p["level"], redo=redo)
+    wc = writer_cfg(cfg, p["level"])
+    wc["_STYLE"] = {"sounds": (p.get("style") or {}).get("sounds") or {}}     # your sound style from StoryMaker
+    sm.plan_sounds(wc, story, p["level"], redo=redo)
     for sec, sc in zip(sections, story["scenes"]):
         sec["sound"] = sc.get("sound")
     p["sounds_done"] = True

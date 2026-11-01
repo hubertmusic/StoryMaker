@@ -260,6 +260,19 @@ def sm_stories(user=Depends(current_user)):
     return {"ok": True, "stories": out}
 
 
+def keep_style(user, pid):
+    """Your sound style from StoryMaker (sounds you love, sounds never to use) goes with the book."""
+    try:
+        r = sm_get(user["token"], "/api/style", timeout=8)
+        st = (r.json() or {}).get("style") or {} if r.status_code == 200 else {}
+    except Exception:
+        st = {}
+    if st.get("sounds"):
+        d, p, _ = E.load_project(cfg, pid)
+        p["style"] = {"sounds": st["sounds"]}
+        E.save_project(d, p)
+
+
 @app.post("/api/import/storymaker")
 def import_sm(body: dict = Body(...), user=Depends(current_user)):
     sid = str(body.get("id", ""))
@@ -279,6 +292,7 @@ def import_sm(body: dict = Body(...), user=Depends(current_user)):
     full = r.json()
     check_level(user, full.get("level") or "family")
     pid = E.import_storymaker(cfg, user["id"], full, sid)
+    keep_style(user, pid)
     d, p, _ = E.load_project(cfg, pid)
     for name in ("cover.jpg", "thumb.jpg"):            # the story's cover art, if it has one
         try:
@@ -303,6 +317,7 @@ def import_file(file: UploadFile = File(...), title: str = Form(""), level: str 
             raise HTTPException(413, "That file is too big (60 MB at most).")
     try:
         pid = E.import_file(cfg, user["id"], tmp.name, file.filename or "book.txt", title.strip()[:120], level)
+        keep_style(user, pid)
     finally:
         Path(tmp.name).unlink(missing_ok=True)
     return {"ok": True, "id": pid}
@@ -315,6 +330,7 @@ def import_text(body: dict = Body(...), user=Depends(current_user)):
     if len(text) > 5_000_000:
         raise HTTPException(413, "That's too much text to paste; upload it as a file.")
     pid = E.import_text(cfg, user["id"], str(body.get("title", ""))[:120], text, level)
+    keep_style(user, pid)
     return {"ok": True, "id": pid}
 
 

@@ -628,10 +628,66 @@ def keywords_block(kws, written="", last=False, whole=False):
     return line + "\n"
 
 
+# ── your style: how you want stories written, and how pictures, video and sounds should feel (from the web page) ──
+GROWN_UP = ("mature", "explicit")
+
+
+def style_from_env():
+    try:
+        return json.loads(os.environ.get("STORYMAKER_STYLE") or "{}")
+    except ValueError:
+        return {}
+
+
+def _clip(text, n):
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return text[:n] + ("…" if len(text) > n else "")
+
+
+def style_block(style, level):
+    """The reader's own writing style, for every writing prompt: their notes, what they said about earlier stories,
+    and passages to match. Grown-up stories use the grown-up profile; everything else the everyday one."""
+    w = ((style or {}).get("writing") or {}).get("grown" if level in GROWN_UP else "everyday") or {}
+    adult_only = level == "explicit"
+    ok = lambda t: not (adult_only and (young_age(t) or MINOR_WORDS.search(t)))    # nothing young, ever
+    lines = []
+    if w.get("tone") and ok(w["tone"]):
+        lines.append(f"- Tone, voice and feel: {_clip(w['tone'], 600)}")
+    if w.get("use") and ok(w["use"]):
+        lines.append(f"- Words, phrasing and things the reader wants used: {_clip(w['use'], 500)}")
+    if w.get("avoid"):
+        lines.append(f"- Never use or do: {_clip(w['avoid'], 400)}")
+    fb = [f for f in (w.get("feedback") or [])[-10:] if f.get("notes") and ok(f["notes"])]
+    for f in fb:
+        how = {"up": "liked", "down": "didn't like"}.get(f.get("rating"), "said")
+        about = f" ({_clip(f.get('title'), 60)})" if f.get("title") else ""
+        lines.append(f"- About an earlier story{about}, the reader {how}: {_clip(f['notes'], 300)}")
+    refs = [r for r in (w.get("references") or []) if str(r).strip() and ok(r)][-3:]
+    if not lines and not refs:
+        return ""
+    out = "\nThe reader's own style guide (follow it closely; it comes before your usual habits):\n" + "\n".join(lines)
+    if refs:
+        out += ("\nPassages the reader loves. Match their voice, rhythm, sentence length, vocabulary, dialogue and "
+                "way of describing things, but never copy their events, names or sentences:\n" +
+                "\n".join(f'"""{_clip(r, 1200)}"""' for r in refs))
+    return out + "\n"
+
+
+def apply_media_style(cfg, story):
+    """Your picture and video style goes with the story, so remakes use it too."""
+    st = cfg.get("_STYLE") or {}
+    pics, vid = (st.get("pictures") or {}), (st.get("video") or {})
+    keep = {"pictures": _clip(pics.get("style"), 300), "pictures_avoid": _clip(pics.get("avoid"), 200),
+            "video": _clip(vid.get("style"), 300)}
+    if any(keep.values()):
+        story["user_style"] = keep
+
+
 def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapters=1, job=None, detail="standard"):
     provider = cfg["STORY_PROVIDER"].lower()
     audience, rules, length = level_info(level)
     rules += style_rules(cfg.get("_PREFS"), level)
+    rules += style_block(cfg.get("_STYLE"), level)
     length *= DETAIL.get(detail, 1.0)
     lo, hi = (20, 28) if clip_mode else (120, 200) if chapters > 1 else (60, 110)   # clips need short narration
     if not clip_mode:
@@ -1406,7 +1462,11 @@ def shot_prompt(story, scene, kind):
             if kind == "video" else " No text, words, letters, captions or watermarks anywhere in the image.")
     if story.get("level") in ("young-kids", "kids"):
         tail += " Gentle, friendly and child-appropriate; nothing scary or violent."
-    return f"Style: {story.get('visual_style', '')}. Characters: {story.get('characters', '')}. Shot: {base}.{tail}"
+    us = story.get("user_style") or {}
+    look = ". ".join(x for x in (us.get("pictures"), story.get("visual_style", "")) if x)
+    if kind == "video" and us.get("video"):
+        tail = f" Camera and motion: {us['video']}." + tail
+    return f"Style: {look}. Characters: {story.get('characters', '')}. Shot: {base}.{tail}"
 
 
 # ───────────────────────────── pictures ─────────────────────────────
@@ -1421,6 +1481,9 @@ def local_image(cfg, prompt, w, h, out_path, level="family"):
     """A picture from the image app on your own computer (Draw Things, or Automatic1111/Forge):
     its txt2img API. Free and private. Grown-up stories only ever get tasteful pictures."""
     neg = "text, letters, words, watermark, signature, blurry, deformed, extra fingers, bad anatomy"
+    avoid = (((cfg.get("_STYLE") or {}).get("pictures") or {}).get("avoid") or "").strip()
+    if avoid:
+        neg += ", " + _clip(avoid, 200)
     if level in ("mature", "explicit"):
         prompt += TASTEFUL
         neg += ", " + TASTEFUL_NEG
@@ -1449,8 +1512,9 @@ def make_cover(cfg, story, out_dir, level):
     if out.exists() or cfg.get("COVER_ART", "on") != "on" or pick_image_provider(cfg) != "local":
         return out if out.exists() else None
     raw = out_dir / ".cover.png"
+    look = ". ".join(x for x in ((story.get("user_style") or {}).get("pictures"), story.get("visual_style", "")) if x)
     prompt = (f"Book cover art for the story \"{story['title']}\": {story.get('logline', '')}. "
-              f"{story.get('visual_style', '')}. Characters: {story.get('characters', '')}. "
+              f"{look}. Characters: {story.get('characters', '')}. "
               "Beautiful, cinematic, evocative. No text, no title, no lettering.")
     try:
         local_image(cfg, prompt, 1024, 1024, raw, level)
@@ -2260,9 +2324,12 @@ def plan_sounds(cfg, story, level, redo=False):
             text = "\n\n".join(f"Scene {k + 1} ({story['scenes'][i].get('heading', '')}):\n"
                                f"{story['scenes'][i]['narration'][:1800]}" for k, i in enumerate(batch))
             try:
-                wishes = story.get("sound_wishes") or ""
+                snd = ((cfg.get("_STYLE") or {}).get("sounds") or {})
+                wishes = ", ".join(x for x in (story.get("sound_wishes"), _clip(snd.get("like"), 300)) if x)
                 wl = (f"\nThe listener especially wants to hear: {wishes}. Use these wherever they fit the scene, "
                       "as the background or as effects." if wishes else "")
+                if snd.get("avoid"):
+                    wl += f"\nNever use these sounds: {_clip(snd['avoid'], 200)}."
                 r = ask_writer(cfg, SOUND_PROMPT.format(title=story["title"], genre=story.get("genre", ""),
                                                          audience=audience, max_fx=max_fx, rules=rules, scenes=text,
                                                          wishes=wl),
@@ -3378,6 +3445,7 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
         raise ValueError("That part of the story doesn't exist.")
     audience, rules, _ = level_info(level)
     rules += style_rules(story.get("prefs"), level)
+    rules += style_block(cfg.get("_STYLE"), level)
     adult = level == "explicit"
     extra = ("If the scene involves sex, write it out fully and explicitly, moment by moment, in graphic detail. "
              if adult else "")
@@ -3615,6 +3683,7 @@ def run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series):
             story["prefs"] = cfg["_PREFS"]
         if args.sounds:
             story["sound_wishes"] = args.sounds.strip()[:300]
+        apply_media_style(cfg, story)
         if args.narrator and VOICE_SPEC.match(args.narrator):
             story["voice_choice"] = {"narrator": args.narrator, "characters": {}}
         story_file.write_text(json.dumps(story, indent=2))
@@ -3767,6 +3836,45 @@ def job_key(args, idea, cfg, scenes, vprovider, level, series):
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:12]
 
 
+def recover_settings(cfg, args):
+    """An unfinished story: its plan (outline.json) and the scenes it wrote are in its job folder. Work out how it
+    was set up (chapters and scenes from the plan; level and detail from its log) and carry on in that folder,
+    so only the missing scenes are written."""
+    rid = re.sub(r"[^a-f0-9]", "", args.recover or "")
+    folder = jobs_dir(cfg) / rid
+    if not rid or not (folder / "outline.json").exists():
+        print(json.dumps({"ok": False, "error": "There's nothing saved for that story to carry on from."}))
+        sys.exit(2)
+    st = jobs_dir(cfg) / f"{rid}.status.json"
+    if not args.child and st.exists() and time.time() - st.stat().st_mtime < 15 * 60:
+        try:
+            if json.loads(st.read_text()).get("state") in ("running", "queued"):
+                print(json.dumps({"ok": False, "error": "That story is already being worked on."}))
+                sys.exit(2)
+        except ValueError:
+            pass
+    outline = json.loads((folder / "outline.json").read_text())
+    chs = outline.get("chapters") or []
+    args.chapters = max(1, len(chs))
+    args.scenes = max([len(c.get("scenes") or []) for c in chs] + [1])
+    logf = jobs_dir(cfg) / f"{rid}.log"
+    text = logf.read_text(errors="replace") if logf.exists() else ""
+    m = re.search(r"Writing a \d+-chapter story \(\d+ scenes each, about (\d+) words per scene\) for (.+?) with", text)
+    if m:
+        for name, info in LEVELS.items():
+            if info[0] == m.group(2):
+                args.level = name
+                words = int(m.group(1))
+                args.detail = min(DETAIL, key=lambda d: abs(160 * info[2] * DETAIL[d] - words))
+                break
+    m = re.search(r"--level['\",\s]+([a-z-]+)", text)
+    if not args.level and m and m.group(1) in LEVELS:
+        args.level = m.group(1)
+    if not args.idea:
+        args.idea = (outline.get("logline") or outline.get("title") or "Continue the story.")[:2000]
+    args._job = rid
+
+
 def main():
     ap = argparse.ArgumentParser(description="Write a story and turn it into audio and video.")
     ap.add_argument("--idea", help="What the story is about (or pipe it in on stdin)")
@@ -3790,6 +3898,8 @@ def main():
     ap.add_argument("--estimate", action="store_true", help="print the approximate cost and stop")
     ap.add_argument("--yes", action="store_true", help="skip the MAX_COST_USD check")
     ap.add_argument("--fresh", action="store_true", help="ignore any unfinished earlier attempt")
+    ap.add_argument("--no-style", action="store_true", help="don't use your saved style for this story")
+    ap.add_argument("--recover", metavar="JOB", help="carry on an unfinished story from what it already wrote")
     ap.add_argument("--background", action="store_true", help="return at once; notify when finished")
     ap.add_argument("--status", metavar="JOB_ID", help="print the status of a background job")
     ap.add_argument("--open", action="store_true", help="Mac: open the result when done")
@@ -3827,6 +3937,10 @@ def main():
         cfg["STORY_PROVIDER"] = args.provider
     if args.video:
         cfg["VIDEO_PROVIDER"] = args.video
+
+    cfg["_STYLE"] = {} if args.no_style else style_from_env()
+    if args.recover:                                  # finish a stopped story from its saved plan and scenes
+        recover_settings(cfg, args)
 
     if args.status:
         p_ = jobs_dir(cfg) / f"{args.status}.status.json"
@@ -3970,7 +4084,7 @@ def main():
     if not idea and not series:
         sys.exit("No story idea given. Use --idea \"...\" or pipe text in.")
 
-    job_id = job_key(args, idea, cfg, scenes, vprovider, level, series)
+    job_id = getattr(args, "_job", None) or job_key(args, idea, cfg, scenes, vprovider, level, series)
     job = jobs_dir(cfg) / job_id
     if args.fresh and job.exists():
         shutil.rmtree(job)

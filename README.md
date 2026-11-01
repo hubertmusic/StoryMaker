@@ -576,3 +576,15 @@ then open http://localhost:8095's **Send to Audio Studio** button, or http://loc
 **Characters list:** every story now starts with a list like "Mira: a woman", "Jake: a man", "Lily: a girl".
 Those genders are locked. Change them in *Edit the text* (the Characters box at the top) or in *Cast*. The
 voices, later episodes and the Audio Studio all follow them.
+
+## 13. Your style
+
+Press **Style** at the top of StoryMaker to teach it your taste.
+- **Writing:** tone and voice, words and phrasing to use or avoid, and passages of writing to match. The
+  writer copies the voice of those passages, not their stories. There are two profiles: everyday stories, and
+  grown-up stories (Mature and Explicit). Each only affects its own kind of story.
+- **Pictures, video, sounds:** the look of pictures and what never to show, camera and motion, and sounds you
+  love or never want. Grown-up pictures always stay tasteful.
+- **Feedback:** the Feedback button on any story saves what you liked or didn't (and, if you like, a passage to
+  match) into the matching style. Every story after that uses it.
+- To make one story without your style, untick **Use my style** under More options.

@@ -14,6 +14,7 @@
     <a href="#library">Library</a>
     <span class="who" id="whoAmI"></span>
     <button type="button" class="quiet signout" id="signOut">Sign out</button>
+    <button type="button" class="quiet style-btn" id="styleBtn">Style</button>
     <button type="button" class="gear" id="gearBtn" aria-label="Settings" title="Settings">
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6a.5.5 0 0 0 .1-.6l-1.9-3.3a.5.5 0 0 0-.6-.2l-2.4 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-3.8a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.4-1a.5.5 0 0 0-.6.2L2.5 8.8a.5.5 0 0 0 .1.6L4.6 11a7.5 7.5 0 0 0 0 2l-2 1.6a.5.5 0 0 0-.1.6l1.9 3.3c.1.2.4.3.6.2l2.4-1c.5.4 1.1.7 1.7 1l.4 2.6c0 .2.2.4.5.4h3.8c.3 0 .5-.2.5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.4 1c.2.1.5 0 .6-.2l1.9-3.3a.5.5 0 0 0-.1-.6L19.4 13ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
     </button>
@@ -183,6 +184,7 @@
             <option value="first">The main character (first person: "I said")</option>
           </select>
         </div>
+        <label class="check"><input type="checkbox" id="useStyle" checked> Use my style (set it with the Style button at the top)</label>
         <label class="check"><input type="checkbox" id="portrait"> Phone-shaped video (9:16)</label>
         <label class="check"><input type="checkbox" id="book"> Picture book for story or audio (draws pictures)</label>
       </details>
@@ -239,6 +241,11 @@
       <h2>Library</h2>
       <select id="filter" aria-label="Show stories from"><option value="">All stories</option></select>
     </div>
+    <div class="unfinished" id="unfinished" hidden>
+      <h3>Unfinished</h3>
+      <p class="hint">Stories that stopped before the end. What's already written is kept. <strong>Recover</strong> finishes it from where it stopped. Stories cut off by a restart carry on by themselves.</p>
+      <div id="unfinishedList"></div>
+    </div>
     <div class="shelf" id="shelf"></div>
     <p class="empty" id="shelfEmpty" hidden>No stories yet. Make your first one above.</p>
   </section>
@@ -293,6 +300,65 @@
         <button class="go" type="submit">Add this person</button>
       </form>
     </section>
+  </div>
+  <form method="dialog" class="dlg-float"><button class="float-close">Close</button></form>
+</dialog>
+
+<dialog id="styleDlg" aria-labelledby="styleH">
+  <form method="dialog" class="dlg-x"><button class="x-btn" aria-label="Close" title="Close">&times;</button></form>
+  <div class="style-body">
+    <h3 id="styleH">Your style</h3>
+    <p class="level-note">Everything here goes into every story you make, so the writer, pictures, video and sounds
+      follow your taste. It gets better as you give feedback on stories (the Feedback button on each one).</p>
+
+    <fieldset class="choice style-tabs" id="styleTabs">
+      <legend>Part</legend>
+      <label><input type="radio" name="stab" value="writing" checked> Writing</label>
+      <label><input type="radio" name="stab" value="pictures"> Pictures</label>
+      <label><input type="radio" name="stab" value="video"> Video</label>
+      <label><input type="radio" name="stab" value="sounds"> Sounds</label>
+    </fieldset>
+
+    <section class="style-pane" data-pane="writing">
+      <fieldset class="choice" id="profileRow">
+        <legend>Which stories</legend>
+        <label><input type="radio" name="sprof" value="everyday" checked> Everyday stories</label>
+        <label id="grownProf"><input type="radio" name="sprof" value="grown"> Grown-up (Mature &amp; Explicit)</label>
+      </fieldset>
+      <label for="stTone">Tone, voice and feel</label>
+      <textarea id="stTone" rows="3" placeholder="Warm and witty, close to the main character's thoughts; short punchy sentences in action, long flowing ones in quiet moments."></textarea>
+      <label for="stUse">Words, phrasing and things to use</label>
+      <textarea id="stUse" rows="2" placeholder="Southern turns of phrase; lots of sensory detail (smell, sound, texture); playful banter between the leads."></textarea>
+      <label for="stAvoid">Never use or do</label>
+      <textarea id="stAvoid" rows="2" placeholder="No clichés like 'a shiver ran down her spine'; no narrator summaries; no exclamation marks in narration."></textarea>
+      <div class="refs-head"><label>Passages to match <small class="opt">(paste writing you love: the writer copies the voice, not the story)</small></label>
+        <button type="button" class="small-btn" id="addRef">Add a passage</button></div>
+      <div id="refList"></div>
+      <label>What you've told it <small class="opt">(from the Feedback button on stories)</small></label>
+      <div id="fbList" class="fb-list"></div>
+    </section>
+
+    <section class="style-pane" data-pane="pictures" hidden>
+      <label for="stPic">Picture style</label>
+      <textarea id="stPic" rows="3" placeholder="Soft watercolor with ink outlines, golden-hour light, muted earthy colors, cinematic wide framing."></textarea>
+      <label for="stPicAvoid">Never in pictures</label>
+      <textarea id="stPicAvoid" rows="2" placeholder="cartoonish faces, neon colors, lens flare"></textarea>
+      <p class="level-note">Pictures for grown-up stories always stay tasteful, whatever is written here.</p>
+    </section>
+
+    <section class="style-pane" data-pane="video" hidden>
+      <label for="stVid">Camera and motion</label>
+      <textarea id="stVid" rows="3" placeholder="Slow dolly-ins, shallow depth of field, handheld feel in tense moments, lingering close-ups."></textarea>
+    </section>
+
+    <section class="style-pane" data-pane="sounds" hidden>
+      <label for="stSnd">Sounds you love</label>
+      <textarea id="stSnd" rows="2" placeholder="rain on windows, distant thunder, crackling fireplace, city at night"></textarea>
+      <label for="stSndAvoid">Never use these sounds</label>
+      <textarea id="stSndAvoid" rows="2" placeholder="birdsong, wind chimes, sirens"></textarea>
+    </section>
+
+    <div class="row"><button type="button" class="go" id="styleSave">Save my style</button><span class="settings-msg" id="styleMsg"></span></div>
   </div>
   <form method="dialog" class="dlg-float"><button class="float-close">Close</button></form>
 </dialog>

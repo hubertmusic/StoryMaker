@@ -55,6 +55,8 @@ db.exec(`
     created TEXT NOT NULL DEFAULT (datetime('now')));
 `);
 try { db.exec("ALTER TABLE jobs ADD COLUMN info TEXT"); } catch { /* already there */ }
+db.exec("CREATE TABLE IF NOT EXISTS styles (user_id INTEGER PRIMARY KEY, data TEXT NOT NULL DEFAULT '{}')");
+const CUT_OFF = [];   // stories a restart cut off: they're picked up again by themselves once StoryMaker is ready
 // StoryMaker just started, so nothing is being made yet: work that was cut off by a restart or an update shows
 // as stopped (and Make it again carries on from where it was), not as running forever.
 try {
@@ -67,7 +69,9 @@ try {
       if (st.state === "running" || st.state === "queued") {
         st.state = "failed";
         st.error = "StoryMaker was restarted while this was being made.";
+        st.interrupted = true;
         fs.writeFileSync(f, JSON.stringify(st));
+        CUT_OFF.push(name.replace(".status.json", ""));
       }
     } catch { /* unreadable: leave it */ }
   }
@@ -193,8 +197,11 @@ app.use("/media", (req, res, next) => {
 function runStorymaker(user, args, stdinText = "") {
   return new Promise((resolve) => {
     const explicitOk = user && allowedLevels(user).includes("explicit");
+    const style = user ? styleFor(user) : {};
+    if (user && !allowedLevels(user).includes("mature") && style.writing) delete style.writing.grown;   // only if allowed
     const child = spawn(PYTHON, [SCRIPT, ...args], {
-      env: { ...process.env, MEDIA_BASE_URL: process.env.MEDIA_BASE_URL || "/media", ADULT_CONTENT: explicitOk ? "on" : "off" },
+      env: { ...process.env, MEDIA_BASE_URL: process.env.MEDIA_BASE_URL || "/media", ADULT_CONTENT: explicitOk ? "on" : "off",
+        STORYMAKER_STYLE: JSON.stringify(style) },
     });
     let out = "", err = "";
     child.stdout.on("data", (d) => (out += d));
@@ -234,6 +241,7 @@ function buildArgs(b) {
   const writer = pick(b.writer || "", WRITERS, "");
   if (writer) args.push("--provider", writer);
   if (b.portrait) args.push("--portrait");
+  if (b.useStyle === false) args.push("--no-style");
   if (b.book) args.push("--book");
   if (typeof b.keywords === "string" && b.keywords.trim()) args.push("--keywords", b.keywords.trim().slice(0, 600));
   if (typeof b.sounds === "string" && b.sounds.trim()) args.push("--sounds", b.sounds.trim().slice(0, 300));
@@ -286,7 +294,9 @@ app.post("/api/make", async (req, res) => {
   if (!req.body.series && !idea(req.body).trim()) return res.json({ ok: false, error: "Type what the story should be about first." });
   const r = await runStorymaker(req.user, [...buildArgs(req.body), "--yes", "--background"], idea(req.body));
   if (r.ok && r.job_id) {
-    const info = JSON.stringify({ mode: req.body.mode || "story", book: !!req.body.book, idea: idea(req.body).slice(0, 140) });
+    // everything needed to carry on later from any device, if it's ever cut off
+    const info = JSON.stringify({ mode: req.body.mode || "story", book: !!req.body.book, idea: idea(req.body).slice(0, 140),
+      body: req.body });
     db.prepare("INSERT OR REPLACE INTO jobs (id, user_id, kind, info) VALUES (?, ?, 'make', ?)").run(r.job_id, req.user.id, info);
   }
   res.json(r);
@@ -333,6 +343,107 @@ app.get("/api/jobs/active", (req, res) => {
   res.json({ ok: true, jobs });
 });
 
+// Stories that were started but never finished (stopped, cut off by a restart, or still waiting): the scenes
+// already written are kept in the job's folder. They can be read, carried on, or deleted from any device.
+function jobFolder(id) { return path.join(OUTPUT_DIR, ".jobs", id); }
+function jobScenes(id) {
+  let names = [];
+  try { names = fs.readdirSync(jobFolder(id)).filter((n) => /^scene_c\d+_s\d+\.txt$/.test(n)).sort(); } catch { /* none */ }
+  return names;
+}
+function jobOutline(id) {
+  try { return JSON.parse(fs.readFileSync(path.join(jobFolder(id), "outline.json"), "utf8")); } catch { return null; }
+}
+app.get("/api/jobs/unfinished", (req, res) => {
+  const rows = db.prepare("SELECT * FROM jobs WHERE user_id = ? AND kind = 'make' AND created > datetime('now', '-60 days') "
+    + "ORDER BY created DESC").all(req.user.id);
+  const out = [];
+  for (const j of rows) {
+    const f = path.join(OUTPUT_DIR, ".jobs", `${j.id}.status.json`);
+    let st = {}, age = 0;
+    try { st = JSON.parse(fs.readFileSync(f, "utf8")); age = Date.now() - fs.statSync(f).mtimeMs; } catch { continue; }
+    const stale = (st.state === "running" || st.state === "queued") && age > 60 * 60 * 1000;
+    if (st.state !== "failed" && !stale) continue;
+    const scenes = jobScenes(j.id), outline = jobOutline(j.id);
+    if (!scenes.length && !outline) continue;              // nothing was written: nothing to find
+    let info = {};
+    try { info = JSON.parse(j.info || "{}"); } catch { /* old row */ }
+    const planned = outline && Array.isArray(outline.chapters)
+      ? outline.chapters.reduce((n, c) => n + ((c.scenes || []).length || 0), 0) : 0;
+    out.push({ id: j.id, title: (outline && outline.title) || st.title || "Untitled story", idea: info.idea || "",
+      level: (info.body && info.body.level) || null, started: j.created, written: scenes.length, planned,
+      error: stale ? "It was cut off (StoryMaker or the Mac restarted)." : (st.error || ""),
+      canResume: !!(info.body || outline) });
+  }
+  res.json({ ok: true, stories: out });
+});
+app.get("/api/jobs/:id/text", (req, res) => {
+  const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
+  const j = db.prepare("SELECT * FROM jobs WHERE id = ?").get(id);
+  if (!j || j.user_id !== req.user.id) return res.status(404).json({ ok: false, error: "Not found." });
+  const outline = jobOutline(id) || {};
+  const chapters = outline.chapters || [];
+  const parts = [`# ${outline.title || "Untitled story"}`, ""];
+  if (outline.logline) parts.push(`*${outline.logline}*`, "");
+  let lastCh = 0;
+  for (const name of jobScenes(id)) {
+    const [, c] = name.match(/^scene_c(\d+)_s(\d+)/).map(Number);
+    if (c !== lastCh && chapters.length > 1) {
+      parts.push(`## Chapter ${c}: ${(chapters[c - 1] || {}).title || ""}`, "");
+      lastCh = c;
+    }
+    try { parts.push(fs.readFileSync(path.join(jobFolder(id), name), "utf8").trim(), ""); } catch { /* skip */ }
+  }
+  res.json({ ok: true, text: parts.join("\n"), written: jobScenes(id).length });
+});
+app.post("/api/jobs/:id/resume", async (req, res) => {
+  const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
+  const j = db.prepare("SELECT * FROM jobs WHERE id = ?").get(id);
+  if (!j || j.user_id !== req.user.id) return res.status(404).json({ ok: false, error: "Not found." });
+  res.json(await recoverJob(req.user, j));
+});
+// Carry a stopped story on in its own folder: only the scenes it hasn't written yet are written. Uses the
+// settings it was started with when they're saved; for older stories they're worked out from what it wrote.
+async function recoverJob(user, j) {
+  let info = {};
+  try { info = JSON.parse(j.info || "{}"); } catch { /* old row */ }
+  let args;
+  if (info.body) {
+    const e = levelError(user, info.body);
+    if (e) return { ok: false, error: e };
+    args = [...buildArgs(info.body)];
+  } else {
+    args = ["--mode", ["story", "audio", "video"].includes(info.mode) ? info.mode : "story", ...(info.book ? ["--book"] : [])];
+  }
+  const r = await runStorymaker(user, [...args, "--recover", j.id, "--yes", "--background"], info.body ? idea(info.body) : (info.idea || ""));
+  if (r.ok && r.job_id) {
+    db.prepare("UPDATE jobs SET created = datetime('now') WHERE id = ?").run(j.id);
+    if (r.job_id !== j.id) db.prepare("INSERT OR REPLACE INTO jobs (id, user_id, kind, info) VALUES (?, ?, 'make', ?)")
+      .run(r.job_id, j.user_id, j.info);
+  }
+  return r;
+}
+// After a restart (an update, the Mac restarting), stories that were being written carry on by themselves.
+setTimeout(async () => {
+  for (const id of CUT_OFF) {
+    const j = db.prepare("SELECT * FROM jobs WHERE id = ? AND kind = 'make' AND created > datetime('now', '-2 days')").get(id);
+    const u = j && db.prepare("SELECT * FROM users WHERE id = ?").get(j.user_id);
+    if (!j || !u || !fs.existsSync(path.join(jobFolder(id), "outline.json"))) continue;
+    const r = await recoverJob(u, j);
+    console.log(`Carrying on story ${id} after the restart: ${r.ok ? "started" : r.error}`);
+  }
+}, 20000);
+
+app.delete("/api/jobs/:id", (req, res) => {
+  const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
+  const j = db.prepare("SELECT * FROM jobs WHERE id = ?").get(id);
+  if (!j || j.user_id !== req.user.id) return res.status(404).json({ ok: false, error: "Not found." });
+  fs.rmSync(jobFolder(id), { recursive: true, force: true });
+  fs.rmSync(path.join(OUTPUT_DIR, ".jobs", `${id}.status.json`), { force: true });
+  db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
+  res.json({ ok: true });
+});
+
 // Preview pictures of a story that's still being made (small JPEGs in its work folder).
 app.get("/api/status/:id/preview/:name", (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
@@ -341,6 +452,65 @@ app.get("/api/status/:id/preview/:name", (req, res) => {
   const f = path.join(OUTPUT_DIR, ".jobs", id, name);
   if (!fs.existsSync(f)) return res.sendStatus(404);
   res.set("Cache-Control", "no-store").sendFile(f);
+});
+
+// ───────────────────────────── your style ─────────────────────────────
+// How you want stories written (tone, words, passages to match, and what you said about earlier stories), and
+// how pictures, video and sounds should feel. Kept per person and used for everything they make.
+function styleFor(u) {
+  try { return JSON.parse((db.prepare("SELECT data FROM styles WHERE user_id = ?").get(u.id) || {}).data || "{}"); } catch { return {}; }
+}
+function saveStyle(u, data) {
+  db.prepare("INSERT INTO styles (user_id, data) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data")
+    .run(u.id, JSON.stringify(data));
+}
+const str = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
+function cleanProfile(p) {
+  p = p || {};
+  return {
+    tone: str(p.tone, 1500), use: str(p.use, 1200), avoid: str(p.avoid, 800),
+    references: (Array.isArray(p.references) ? p.references : []).map((r) => str(r, 4000)).filter((r) => r.trim()).slice(-5),
+    feedback: (Array.isArray(p.feedback) ? p.feedback : []).filter((f) => f && typeof f === "object").map((f) => ({
+      rating: ["up", "down"].includes(f.rating) ? f.rating : "", notes: str(f.notes, 800), title: str(f.title, 120),
+      date: str(f.date, 30) })).filter((f) => f.notes.trim()).slice(-20),
+  };
+}
+app.get("/api/style", (req, res) => {
+  const st = styleFor(req.user);
+  res.json({ ok: true, style: st, grownUp: allowedLevels(req.user).includes("mature") });
+});
+app.post("/api/style", (req, res) => {
+  const b = req.body || {};
+  const w = b.writing || {};
+  const data = {
+    writing: { everyday: cleanProfile(w.everyday), grown: cleanProfile(w.grown) },
+    pictures: { style: str((b.pictures || {}).style, 600), avoid: str((b.pictures || {}).avoid, 400) },
+    video: { style: str((b.video || {}).style, 600) },
+    sounds: { like: str((b.sounds || {}).like, 600), avoid: str((b.sounds || {}).avoid, 400) },
+  };
+  if (!allowedLevels(req.user).includes("mature")) data.writing.grown = (styleFor(req.user).writing || {}).grown || cleanProfile({});
+  saveStyle(req.user, data);
+  res.json({ ok: true });
+});
+// Feedback on a story: what you liked or didn't, and optionally a passage to match. Goes into the style used
+// for stories like it (grown-up stories teach the grown-up style, everything else the everyday one).
+app.post("/api/stories/:id/feedback", (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const b = req.body || {};
+  const r = readResult(id) || {};
+  const prof = ["mature", "explicit"].includes(r.level) ? "grown" : "everyday";
+  const st = styleFor(req.user);
+  st.writing = st.writing || {};
+  const p = cleanProfile(st.writing[prof]);
+  const notes = str(b.notes, 800).trim();
+  if (notes) p.feedback.push({ rating: ["up", "down"].includes(b.rating) ? b.rating : "", notes, title: str(r.title, 120),
+    date: new Date().toISOString().slice(0, 10) });
+  const passage = str(b.passage, 4000).trim();
+  if (passage) p.references.push(passage);
+  if (!notes && !passage) return res.json({ ok: false, error: "Write what you liked or didn't, or keep a passage." });
+  st.writing[prof] = cleanProfile(p);
+  saveStyle(req.user, st);
+  res.json({ ok: true, profile: prof });
 });
 
 // ───────────────────────────── accounts ─────────────────────────────
