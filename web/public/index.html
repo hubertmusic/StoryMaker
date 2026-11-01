@@ -320,15 +320,19 @@
     </fieldset>
 
     <section class="style-pane" data-pane="writing">
-      <fieldset class="choice three-col" id="profileRow">
+      <fieldset class="choice five-col" id="profileRow">
         <legend>Which stories this style is for</legend>
-        <label><input type="radio" name="sprof" value="kids"> Kids &amp; family</label>
-        <label><input type="radio" name="sprof" value="everyday" checked> Teens &amp; adults</label>
-        <label id="grownProf"><input type="radio" name="sprof" value="grown"> Grown-up: Mature &amp; Explicit</label>
+        <label data-prof="kids"><input type="radio" name="sprof" value="kids"> Kids</label>
+        <label data-prof="family"><input type="radio" name="sprof" value="family"> Family</label>
+        <label data-prof="sfw"><input type="radio" name="sprof" value="sfw" checked> Safe for work</label>
+        <label data-prof="mature"><input type="radio" name="sprof" value="mature"> Mature</label>
+        <label data-prof="explicit"><input type="radio" name="sprof" value="explicit"> Explicit</label>
       </fieldset>
+      <p class="level-note" id="profHint"></p>
       <label class="check share-check"><input type="checkbox" id="stShare" checked> Also use this style for the other kinds of stories</label>
       <p class="level-note" id="shareNote">Used for gentler stories than it's made for, it's softened automatically: the same voice,
-        rhythm and words, but no swearing, nothing crude, sexual or suggestive. Kids' stories never get grown-up passages.</p>
+        rhythm and words, but Mature gets nothing graphic, and Safe for work, Family and Kids get no swearing and nothing
+        crude, sexual or suggestive. Family and Kids stories never get passages from Mature or Explicit styles.</p>
       <label for="stTone">Tone, voice and feel</label>
       <textarea id="stTone" rows="3" placeholder="Warm and witty, close to the main character's thoughts; short punchy sentences in action, long flowing ones in quiet moments."></textarea>
       <label for="stUse">Words, phrasing and things to use</label>

@@ -646,7 +646,7 @@ function storyTools(s, id, el) {
       const r = await api(`/api/stories/${encodeURIComponent(id)}/feedback`, { rating, notes: notes.value, passage: kc.checked ? passage.value : "" });
       go.disabled = false;
       msg.className = r.ok ? "settings-msg" : "settings-msg bad";
-      msg.textContent = r.ok ? `Saved to your ${{ grown: "grown-up", kids: "kids & family", everyday: "teens & adults" }[r.profile]} style. The next stories will use it.` : (r.error || "Not saved.");
+      msg.textContent = r.ok ? `Saved to your ${{ kids: "Kids", family: "Family", sfw: "Safe for work", mature: "Mature", explicit: "Explicit" }[r.profile] || ""} style. The next stories like this one will use it.` : (r.error || "Not saved.");
       if (r.ok) { notes.value = ""; kc.checked = false; passage.hidden = true; }
     });
     p.append(chips, nl, notes, keep, passage, go, msg);
@@ -1046,18 +1046,23 @@ $("addRef").addEventListener("click", () => { if ($("refList").children.length <
 document.querySelectorAll('input[name="stab"]').forEach((r) => r.addEventListener("change", () => {
   document.querySelectorAll(".style-pane").forEach((p) => { p.hidden = p.dataset.pane !== r.value; });
 }));
-let lastProfile = "everyday";
+let lastProfile = "sfw";
+const PROF_HINTS = { kids: "Young kids, Kids and Middle grade stories.", family: "Stories for Everyone: the whole family together.",
+  sfw: "Teens and Adults stories: clean, nothing you couldn't read at work.", mature: "Mature (R) stories: strong language and heat, nothing graphic.",
+  explicit: "Explicit (18+) stories, written by the writer on your own computer." };
+function showProfHint() { $("profHint").textContent = PROF_HINTS[curProfile()] || ""; }
 document.querySelectorAll('input[name="sprof"]').forEach((r) => r.addEventListener("change", () => {
   const now = curProfile();
   document.querySelector(`input[name="sprof"][value="${lastProfile}"]`).checked = true; readProfileForm();
-  document.querySelector(`input[name="sprof"][value="${now}"]`).checked = true; lastProfile = now; fillProfileForm();
+  document.querySelector(`input[name="sprof"][value="${now}"]`).checked = true; lastProfile = now; fillProfileForm(); showProfHint();
 }));
 $("styleBtn").addEventListener("click", async () => {
   const r = await api("/api/style");
   styleData = (r.ok && r.style) || {};
-  $("grownProf").hidden = !r.grownUp;
-  document.querySelector('input[name="sprof"][value="everyday"]').checked = true; lastProfile = "everyday";
-  fillProfileForm();
+  const allowed = r.profiles || ["kids", "family", "sfw"];
+  document.querySelectorAll("#profileRow label[data-prof]").forEach((l) => { l.hidden = !allowed.includes(l.dataset.prof); });
+  document.querySelector('input[name="sprof"][value="sfw"]').checked = true; lastProfile = "sfw";
+  fillProfileForm(); showProfHint();
   $("stPic").value = (styleData.pictures || {}).style || ""; $("stPicAvoid").value = (styleData.pictures || {}).avoid || "";
   $("stVid").value = (styleData.video || {}).style || "";
   $("stSnd").value = (styleData.sounds || {}).like || ""; $("stSndAvoid").value = (styleData.sounds || {}).avoid || "";

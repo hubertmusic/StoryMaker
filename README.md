@@ -581,11 +581,12 @@ voices, later episodes and the Audio Studio all follow them.
 
 Press **Style** at the top of StoryMaker to teach it your taste.
 - **Writing:** tone and voice, words and phrasing to use or avoid, and passages of writing to match. The
-  writer copies the voice of those passages, not their stories. Pick which stories each style is for: Kids & family,
-  Teens & adults, or Grown-up (Mature & Explicit). Tick "Also use this style for the other kinds of stories"
-  to share it: used for a gentler story than it's made for, it's softened automatically (same voice, rhythm
-  and words, but no swearing and nothing crude, sexual or suggestive), and kids' stories never get grown-up
-  passages.
+  writer copies the voice of those passages, not their stories. Pick which stories each style is for: Kids (Young
+  kids, Kids, Middle grade), Family (Everyone), Safe for work (Teens, Adults), Mature, or Explicit. Tick
+  "Also use this style for the other kinds of stories" to share it. Used for a gentler story than it's made
+  for, it's softened automatically, keeping the same voice, rhythm and words: Mature gets nothing graphic;
+  Safe for work, Family and Kids get no swearing and nothing crude, sexual or suggestive. Family and Kids
+  stories never get passages from Mature or Explicit styles.
 - **Pictures, video, sounds:** the look of pictures and what never to show, camera and motion, and sounds you
   love or never want. Grown-up pictures always stay tasteful.
 - **Feedback:** the Feedback button on any story saves what you liked or didn't (and, if you like, a passage to

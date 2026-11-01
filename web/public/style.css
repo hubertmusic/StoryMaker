@@ -377,3 +377,7 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .share-check { margin-top: 10px; }
 #shareNote { margin-top: 4px; }
 @media (max-width: 560px) { .choice.three-col { grid-template-columns: 1fr; } }
+.choice.five-col { grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); }
+.choice.five-col label { font-size: 15px; padding: 9px 4px; }
+#profHint { margin: 6px 0 0; }
+@media (max-width: 640px) { .choice.five-col { grid-template-columns: repeat(2, 1fr); } }

@@ -198,7 +198,7 @@ function runStorymaker(user, args, stdinText = "") {
   return new Promise((resolve) => {
     const explicitOk = user && allowedLevels(user).includes("explicit");
     const style = user ? styleFor(user) : {};
-    if (user && !allowedLevels(user).includes("mature") && style.writing) delete style.writing.grown;   // only if allowed
+    if (user && style.writing) for (const p of PROFILES) if (!allowedProfiles(user).includes(p)) delete style.writing[p];
     const child = spawn(PYTHON, [SCRIPT, ...args], {
       env: { ...process.env, MEDIA_BASE_URL: process.env.MEDIA_BASE_URL || "/media", ADULT_CONTENT: explicitOk ? "on" : "off",
         STORYMAKER_STYLE: JSON.stringify(style) },
@@ -457,8 +457,25 @@ app.get("/api/status/:id/preview/:name", (req, res) => {
 // ───────────────────────────── your style ─────────────────────────────
 // How you want stories written (tone, words, passages to match, and what you said about earlier stories), and
 // how pictures, video and sounds should feel. Kept per person and used for everything they make.
+const PROFILES = ["kids", "family", "sfw", "mature", "explicit"];
+const LEVEL_PROFILE = { "young-kids": "kids", kids: "kids", "middle-grade": "kids", family: "family", teen: "sfw",
+  adult: "sfw", mature: "mature", explicit: "explicit" };
 function styleFor(u) {
-  try { return JSON.parse((db.prepare("SELECT data FROM styles WHERE user_id = ?").get(u.id) || {}).data || "{}"); } catch { return {}; }
+  let st = {};
+  try { st = JSON.parse((db.prepare("SELECT data FROM styles WHERE user_id = ?").get(u.id) || {}).data || "{}"); } catch { /* none */ }
+  const w = st.writing || {};
+  // styles saved before there were five kinds: everyday → safe for work, grown-up → mature and explicit
+  if (w.everyday && !w.sfw) w.sfw = w.everyday;
+  if (w.grown && !w.mature) w.mature = w.grown;
+  if (w.grown && !w.explicit) w.explicit = JSON.parse(JSON.stringify(w.grown));
+  if (w.kids && !w.family) w.family = JSON.parse(JSON.stringify(w.kids));
+  delete w.everyday; delete w.grown;
+  st.writing = w;
+  return st;
+}
+function allowedProfiles(u) {
+  const lv = allowedLevels(u);
+  return PROFILES.filter((p) => (p === "mature" ? lv.includes("mature") : p === "explicit" ? lv.includes("explicit") : true));
 }
 function saveStyle(u, data) {
   db.prepare("INSERT INTO styles (user_id, data) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data")
@@ -477,18 +494,21 @@ function cleanProfile(p) {
 }
 app.get("/api/style", (req, res) => {
   const st = styleFor(req.user);
-  res.json({ ok: true, style: st, grownUp: allowedLevels(req.user).includes("mature") });
+  const allowed = allowedProfiles(req.user);
+  for (const p of PROFILES) if (!allowed.includes(p)) delete st.writing[p];
+  res.json({ ok: true, style: st, profiles: allowed });
 });
 app.post("/api/style", (req, res) => {
   const b = req.body || {};
   const w = b.writing || {};
   const data = {
-    writing: { kids: cleanProfile(w.kids), everyday: cleanProfile(w.everyday), grown: cleanProfile(w.grown) },
+    writing: Object.fromEntries(PROFILES.map((p) => [p, cleanProfile(w[p])])),
     pictures: { style: str((b.pictures || {}).style, 600), avoid: str((b.pictures || {}).avoid, 400) },
     video: { style: str((b.video || {}).style, 600) },
     sounds: { like: str((b.sounds || {}).like, 600), avoid: str((b.sounds || {}).avoid, 400) },
   };
-  if (!allowedLevels(req.user).includes("mature")) data.writing.grown = (styleFor(req.user).writing || {}).grown || cleanProfile({});
+  const before = styleFor(req.user).writing || {};
+  for (const p of PROFILES) if (!allowedProfiles(req.user).includes(p)) data.writing[p] = cleanProfile(before[p]);  // untouched
   saveStyle(req.user, data);
   res.json({ ok: true });
 });
@@ -498,8 +518,7 @@ app.post("/api/stories/:id/feedback", (req, res) => {
   const id = guard(req, res); if (!id) return;
   const b = req.body || {};
   const r = readResult(id) || {};
-  const prof = ["mature", "explicit"].includes(r.level) ? "grown"
-    : ["young-kids", "kids", "middle-grade", "family"].includes(r.level) ? "kids" : "everyday";
+  const prof = LEVEL_PROFILE[r.level] || "family";
   const st = styleFor(req.user);
   st.writing = st.writing || {};
   const p = cleanProfile(st.writing[prof]);
