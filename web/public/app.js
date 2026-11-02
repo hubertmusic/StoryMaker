@@ -61,11 +61,16 @@ function updateLevel() {
   const level = document.querySelector('input[name="level"]:checked').value;
   const explicit = level === "explicit";
   const video = document.querySelector('input[name="mode"][value="video"]');
-  video.disabled = explicit && !features.localPictures;   // explicit video = free local pictures only
+  const pics = !!features.localPictures;                  // pictures drawn by the picture app on this Mac
+  video.disabled = explicit && !pics;                     // explicit video = free local pictures only
   $("explicitControls").hidden = !explicit;
-  if (explicit && video.checked) document.querySelector('input[name="mode"][value="audio"]').checked = true;
-  $("writer").disabled = explicit; $("video").disabled = explicit; $("book").disabled = explicit;
+  if (explicit && !pics && video.checked) document.querySelector('input[name="mode"][value="audio"]').checked = true;
+  $("writer").disabled = explicit; $("video").disabled = explicit; $("book").disabled = explicit && !pics;
+  if (explicit && !pics) $("book").checked = false;
   $("explicitNote").hidden = !explicit;
+  $("explicitPics").textContent = pics
+    ? "Pictures, the picture book and the video's moving pictures are drawn by the picture app on your Mac (Draw Things), tasteful only: everyone fully clothed. Keep Draw Things open with its API server on."
+    : "For pictures, a picture book or video, open Draw Things on your Mac, turn on Settings → API Server (HTTP, port 7860), and set LOCAL_IMAGE_URL in storymaker.env. They're drawn on your Mac and stay tasteful.";
 }
 
 async function loadFeatures() {

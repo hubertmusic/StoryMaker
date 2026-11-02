@@ -186,6 +186,8 @@ DEFAULTS = {
     "SUBTITLES": "on",
     "CAPTIONS": "on",
     "MOTION": "on",
+    "MORE_PICTURES": "on",                 # video with free local pictures: long scenes get a new picture every
+    "SECONDS_PER_PICTURE": "40",           # this many seconds, of a later moment in the scene
 }
 
 
@@ -692,9 +694,16 @@ def remember_names(cfg, story):
 
 
 WRITING_CRAFT = ("\nCraft: write clean, natural English. Every sentence is complete and grammatical, with correct spelling "
-                 "and no run-ons, fragments by accident, repeated words or jumbled word order. In dialogue, it's always "
-                 "clear who is speaking: give a speaker's first line in each exchange a short speech tag with their "
-                 "name (\"Mira said\"), and give each character their own consistent way of talking.\n")
+                 "and no run-ons, fragments by accident, repeated words or jumbled word order.\n"
+                 "Sentence structure: one clear idea per sentence. Most sentences 8 to 25 words, none over 35. Vary "
+                 "the length and the opening: never start three sentences in a row with the same word. Keep the subject "
+                 "and its verb close together. No comma splices: two complete thoughts get a full stop, a semicolon, "
+                 "or a joining word (and, but, so). Don't chain more than two 'and's in one sentence. Stay in the past "
+                 "tense and in one point of view. Every pronoun clearly points to one person.\n"
+                 "Dialogue: it's always clear who is speaking. Give a speaker's first line in each exchange a short "
+                 "speech tag with their name (\"Mira said\"); start a new paragraph whenever the speaker changes; "
+                 "every spoken line is inside “double quotes”. Each character keeps their own consistent way of "
+                 "talking.\n")
 
 PROOF_PROMPT = """You are a careful copy editor. Fix this passage of a story so it reads cleanly:
 - spelling, grammar and punctuation;
@@ -720,6 +729,180 @@ def proofread(cfg, text, system=None, extra=""):
         return text
     a, b = len(text.split()), len(new.split())
     return new if 0.85 * a <= b <= 1.25 * a else text
+
+
+# ── sentence checker: finds badly built sentences by rule (no AI), then the writer fixes just those ──
+_ABBR = r"(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Prof|Capt|Lt|Sgt|Col|Gen|Mt|vs|etc|e\.g|i\.e|a\.m|p\.m|U\.S|No)"
+_SENT_END = re.compile(r"([.!?…]+[\"”’)]*)\s+(?=[\"“‘(]?[A-Z0-9])")
+_REPEAT_OK = {"had", "that", "very", "no", "so", "bye", "ha", "knock", "tick", "tock", "really", "please", "go",
+              "come", "yes", "now", "faster", "more", "again", "slowly", "boom", "run", "help", "oh", "wait", "deeper",
+              "harder", "never", "away", "out", "back", "over", "on", "can", "do", "is"}
+_SPELL = None
+
+
+def split_sentences(text):
+    """The sentences of a passage, in order (keeps the dialogue tags with their quotes)."""
+    out = []
+    for para in re.split(r"\n\s*\n|\n", text or ""):
+        para = para.strip()
+        if not para:
+            continue
+        parts = _SENT_END.sub(lambda m: m.group(1) + "\n", para).split("\n")
+        merged = []
+        for p in parts:                       # don't split after an abbreviation ("Mr. Hale")
+            if merged and re.search(r"\b" + _ABBR + r"\.$", merged[-1]):
+                merged[-1] += " " + p
+            else:
+                merged.append(p)
+        out += [m.strip() for m in merged if m.strip()]
+    return out
+
+
+def _speller():
+    global _SPELL
+    if _SPELL is None:
+        try:
+            from spellchecker import SpellChecker
+            _SPELL = SpellChecker(distance=1)
+        except Exception:
+            _SPELL = False
+    return _SPELL
+
+
+def tidy_sentences(text):
+    """Mechanical fixes that never change the meaning: doubled words, stray spaces, doubled punctuation,
+    missing capitals after a full stop, a missing space after a full stop."""
+    t = text or ""
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r" +([,.;:!?])", r"\1", t)
+    t = re.sub(r",{2,}", ",", t)
+    t = re.sub(r"(?<!\.)\.\.(?!\.)", ".", t)
+    t = re.sub(r"([!?])\1{2,}", r"\1", t)
+    t = re.sub(r"\.,|,\.", ".", t)
+
+    t = re.sub(r"\b([A-Za-z]+)(?:\s+\1\b)+", lambda m: m.group(0) if m.group(1).lower() in _REPEAT_OK
+               else m.group(1), t, flags=re.I)                           # "the the" → "the"
+    t = re.sub(r"([a-z]{2})([.!?])([A-Z][a-z])", r"\1\2 \3", t)            # "door.She" → "door. She"
+    t = re.sub(r"\b([a-z]{3,})([.!?])([a-z]{2,})\b(?<!com)(?<!org)(?<!net)", r"\1\2 \3", t)   # "door.she"
+
+    def cap(m):                                                         # "door. she" → "door. She"
+        if re.search(r"\b" + _ABBR + r"\.$", t[max(0, m.start() - 6):m.start() + 1]):
+            return m.group(0)
+        return m.group(1) + m.group(2).upper()
+    t = re.sub(r"(?<![\"”’'.])([.!?]\s+)([a-z])", cap, t)
+    lines = t.split("\n")
+    for k, ln in enumerate(lines):                                      # a spoken line left open at the paragraph end
+        s_ = ln.rstrip()
+        if s_.count("“") == s_.count("”") + 1 and s_.rfind("“") > s_.rfind("”") and s_.endswith((".", "!", "?", "…")):
+            lines[k] = s_ + "”"
+    return "\n".join(lines)
+
+
+def sentence_issues(text, names=()):
+    """Badly built sentences, by rule. Returns a list of (sentence, problem). Fiction is allowed its style, so
+    only clear problems are listed: very long or run-on sentences, comma splices, the same word twice in a row,
+    unbalanced quotes, the same sentence twice, three openers in a row, a lowercase start, likely misspellings."""
+    issues = []
+    sents = split_sentences(text)
+    names_l = {str(n).lower() for n in names if n}
+    seen = {}
+    run_word, run_len = None, 0
+    for s in sents:
+        words = re.findall(r"[A-Za-z’']+", s)
+        n = len(words)
+        bare = re.sub(r"“[^”]*”|\"[^\"]*\"", "", s)                       # narration only, without the quotes
+        if n > 42:
+            issues.append((s, f"too long ({n} words): split it into two or three clear sentences"))
+        elif len(re.findall(r"\band\b", bare, re.I)) >= 4:
+            issues.append((s, "strings too many clauses together with 'and': split it or restructure it"))
+        elif re.search(r"[a-z], (?:he|she|they|I|we|it|you|then)\s+(?:was|were|is|had|did|could|would|felt|"
+                       r"looked|walked|said|turned|took|went|came|saw|knew|thought|smiled|pulled|pushed)\b", bare) \
+                and not re.search(r"\b(?:and|but|or|so|yet|when|while|as|because|if|until|before|after|though|"
+                                  r"although|which|who|where|since|once|as soon as)\b[^,]*,\s*(?:he|she|they|I|we|it|you|then)\s", bare, re.I):
+            issues.append((s, "comma splice: two complete sentences joined by only a comma"))
+        m = re.search(r"\b([A-Za-z]+)\s+\1\b", s, re.I)
+        if m and m.group(1).lower() not in _REPEAT_OK:
+            issues.append((s, f"the word '{m.group(1)}' twice in a row"))
+        if s.count("“") != s.count("”") and not re.search(r"^“[^”]*$|^[^“]*”", s):
+            issues.append((s, "the quotation marks don't match: a spoken line is opened or closed wrongly"))
+        if s.count('"') % 2:
+            issues.append((s, "an odd number of quotation marks"))
+        if re.match(r"^[a-z]", s) and not re.match(r"^(?:e\.g|i\.e)", s):
+            issues.append((s, "starts with a lowercase letter"))
+        if re.match(r"^(?:Because|Although|Whereas|Though)\b", s) and "," not in s and n < 14 and not s.startswith("“"):
+            issues.append((s, "a fragment: it starts like the first half of a sentence and stops"))
+        key = re.sub(r"\W+", " ", s.lower()).strip()
+        if n >= 6 and key in seen:
+            issues.append((s, "the same sentence appears twice in the scene; remove or change one"))
+        seen[key] = 1
+        first = (words[0].lower() if words else "")
+        if first and first == run_word and first not in ("“",):
+            run_len += 1
+            if run_len == 3 and first not in ("and", "but"):
+                issues.append((s, f"the third sentence in a row that starts with '{words[0]}': vary the openings"))
+        else:
+            run_word, run_len = first, 1
+    for para in re.split(r"\n\s*\n", text or ""):
+        if para.count("“") != para.count("”"):
+            issues.append((para.strip()[:220], "this paragraph opens and closes quotes a different number of times"))
+    sp = _speller()
+    if sp:
+        cand = {w for w in re.findall(r"(?<![’'\w])[a-z]{4,}(?![’'\w])", text or "")} - names_l
+        bad = []
+        for w in sorted(sp.unknown(list(cand)))[:40]:
+            fix = sp.correction(w)
+            if fix and fix != w and len(fix) >= 4:
+                bad.append((w, fix))
+        for w, fix in bad[:8]:
+            s = next((x for x in sents if re.search(r"\b" + re.escape(w) + r"\b", x)), w)
+            issues.append((s, f"possible misspelling: '{w}' (maybe '{fix}'); fix it only if it's really wrong"))
+    out, dup = [], set()
+    for s, p in issues:
+        if (s, p) not in dup:
+            dup.add((s, p))
+            out.append((s, p))
+    return out
+
+
+SENTENCE_FIX_PROMPT = """You are a line editor. The passage below has these sentence problems:
+{issues}
+
+Rewrite the passage fixing ONLY those sentences (split long or run-on sentences, fix splices, quotes, repeated words
+and spelling). Keep every other sentence exactly as it is. Keep the events, details, dialogue meaning, names,
+style, tone, length and how explicit it is. Don't summarize, soften, add scenes or comment. Every spoken line stays
+inside “double quotes”. Reply with only the corrected passage.
+{extra}
+---
+{text}
+---"""
+
+
+def fix_sentences(cfg, text, system=None, names=(), rounds=2, extra=""):
+    """Rule check, then targeted fixes by the writer, up to `rounds` times. Never makes it worse: a fix is kept only
+    when it has fewer problems and about the same length."""
+    text = tidy_sentences(text)
+    if cfg.get("PROOFREAD", "on") != "on" or cfg["STORY_PROVIDER"].lower() == "demo" or len(text.split()) < 40:
+        return text
+    issues = sentence_issues(text, names)
+    for _ in range(rounds):
+        if not issues:
+            break
+        listed = "\n".join(f"{k + 1}. \"{s[:300]}\": {p}" for k, (s, p) in enumerate(issues[:14]))
+        try:
+            new = clean_prose(ask_writer(cfg, SENTENCE_FIX_PROMPT.format(issues=listed, text=text, extra=extra),
+                                         as_json=False, system=system))
+        except Exception as e:
+            log(f"Sentence fixing skipped ({str(e)[:100]})")
+            break
+        new = tidy_sentences(new)
+        a, b = len(text.split()), len(new.split())
+        left = sentence_issues(new, names)
+        if not (0.85 * a <= b <= 1.2 * a) or len(left) >= len(issues):
+            break
+        text, issues = new, left
+    if issues:
+        log(f"Sentence check: {len(issues)} small thing(s) left in a scene")
+    return text
 
 
 # ── your style: how you want stories written, and how pictures, video and sounds should feel (from the web page) ──
@@ -922,11 +1105,14 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
     lock_written_cast(story, declared)
     if cfg.get("PROOFREAD", "on") == "on" and provider != "demo":
         system = EXPLICIT_SYSTEM if level == "explicit" else None
+        names = [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)]
         for i, sc in enumerate(story.get("scenes", [])):
             if sc.get("proofread"):
                 continue
             report("writing", 0.97, f"Proofreading scene {i + 1} of {len(story['scenes'])}")
             text = proofread(cfg, sc.get("narration", ""), system)
+            report("writing", 0.98, f"Checking sentence structure: scene {i + 1} of {len(story['scenes'])}")
+            text = fix_sentences(cfg, text, system, names)
             if level == "explicit":
                 try:
                     text = adult_guard(cfg, text, system)
@@ -1646,28 +1832,71 @@ def fit_cover(img, w, h):
     return img.crop((left, top, left + w, top + h))
 
 
-def shot_prompt(story, scene, kind):
-    base = scene.get("video_prompt" if kind == "video" else "image_prompt") or scene.get("image_prompt", "")
+PICTURE_UNSAFE = re.compile(
+    GRAPHIC.pattern[:-3] + r"|sex\w*|erotic\w*|horny|arous\w*|strip\w*|breasts?|boob\w*|bras?|foreplay|grind\w*|"
+    r"kink\w*|naughty|seduc\w*|lust\w*|topless|shirtless|bare[- ]chested|bare skin|unclothed|undress\w*|"
+    r"nightgown|negligee|towel|bath\w*|shower\w*|sheets|under the covers|in bed|on the bed|bedroom|"
+    r"cleavage|thighs?|hips|curves?|curvy|busty|sweat\w*|panting|writh\w*|entwined|tangled|on top of|"
+    r"beneath (?:him|her)|skin to skin|body|bodies|push\w* (?:\w+ )?against|pin\w*|press\w* against|touch\w*|caress\w*|stroke\w*|grop\w*|bite|biting|"
+    r"young|youthful|petite|tiny|little|girl\w*|boy\w*|teen\w*|school\w*|child\w*|kid\w*)\b", re.I)
+
+
+def picture_safe(prompt, level):
+    """A picture prompt for a grown-up story, with every part that could lead to an unsuitable picture taken out.
+    Whatever is left is about the place, the mood and the people, fully clothed."""
+    text = str(prompt or "")
+    if level not in ("mature", "explicit") or not PICTURE_UNSAFE.search(text):
+        return text
+    bits = re.split(r"((?<=[.!?;])\s+|,\s*|\s+(?:and|while)\s+)", text)
+    out = ""
+    for k in range(0, len(bits), 2):                       # each part with the separator after it
+        part, sep = bits[k], (bits[k + 1] if k + 1 < len(bits) else "")
+        if part.strip() and not PICTURE_UNSAFE.search(part):
+            out += part + sep
+    return re.sub(r"(?:,\s*|\s+(?:and|while)\s*)$", "", out.strip()).strip()
+
+
+def story_seed(story, extra=0):
+    """The same seed for every picture of a story, so faces, clothes and the look stay the same."""
+    return (int(hashlib.sha1(str(story.get("title", "")).encode()).hexdigest()[:7], 16) + extra) % 2_000_000_000
+
+
+def shot_prompt(story, scene, kind, base=None, local=False):
+    base = base or scene.get("video_prompt" if kind == "video" else "image_prompt") or scene.get("image_prompt", "")
+    level = story.get("level", "family")
     tail = (" Characters do not speak. No on-screen text, captions, subtitles or watermarks."
             if kind == "video" else " No text, words, letters, captions or watermarks anywhere in the image.")
-    if story.get("level") in ("young-kids", "kids"):
+    if level in ("young-kids", "kids"):
         tail += " Gentle, friendly and child-appropriate; nothing scary or violent."
     us = story.get("user_style") or {}
     look = ". ".join(x for x in (us.get("pictures"), story.get("visual_style", "")) if x)
     if kind == "video" and us.get("video"):
         tail = f" Camera and motion: {us['video']}." + tail
-    return f"Style: {look}. Characters: {story.get('characters', '')}. Shot: {base}.{tail}"
+    chars = story.get("characters", "")
+    if level in ("mature", "explicit"):
+        base, chars = picture_safe(base, level), picture_safe(chars, level)
+        if len(base.split()) < 4:                             # nothing safe left: a calm moment from the scene itself
+            calm = [s_ for s_ in split_sentences(scene.get("narration", "")) if "“" not in s_ and '"' not in s_
+                    and len(s_.split()) >= 6 and not PICTURE_UNSAFE.search(s_)]
+            base = calm[0] if calm else ""
+        if len(base.split()) < 4:                             # or the place and the mood
+            base = picture_safe(f"{scene.get('heading', '')}, {story.get('logline', '')}", level) or "a quiet moment"
+        base = "Fully clothed adults, " + base.rstrip(" .") + ". Romantic, atmospheric, cinematic"
+    if local:          # picture apps read the start of a prompt most closely: the shot first, then who and the look
+        return f"{base}. {chars}. {look}.{tail}"
+    return f"Style: {look}. Characters: {chars}. Shot: {base}.{tail}"
 
 
 # ───────────────────────────── pictures ─────────────────────────────
 
 TASTEFUL = (" Tasteful, romantic and suggestive at most: fully clothed or covered, no nudity, nothing sexual shown. "
             "Every person is clearly an adult.")
-TASTEFUL_NEG = ("nude, nudity, naked, nsfw, explicit, sexual, nipples, genitals, underwear, lingerie, child, children, "
-                "teen, young-looking, minor")
+TASTEFUL_NEG = ("nude, nudity, naked, nsfw, explicit, sexual, nipples, genitals, underwear, lingerie, topless, "
+                "bare chest, cleavage, see-through, bikini, swimsuit, bed, sex, erotic, child, children, teen, "
+                "young-looking, minor, schoolgirl, loli")
 
 
-def local_image(cfg, prompt, w, h, out_path, level="family"):
+def local_image(cfg, prompt, w, h, out_path, level="family", seed=-1):
     """A picture from the image app on your own computer (Draw Things, or Automatic1111/Forge):
     its txt2img API. Free and private. Grown-up stories only ever get tasteful pictures."""
     neg = "text, letters, words, watermark, signature, blurry, deformed, extra fingers, bad anatomy"
@@ -1675,14 +1904,14 @@ def local_image(cfg, prompt, w, h, out_path, level="family"):
     if avoid:
         neg += ", " + _clip(avoid, 200)
     if level in ("mature", "explicit"):
-        prompt += TASTEFUL
-        neg += ", " + TASTEFUL_NEG
+        prompt = picture_safe(prompt, level) + TASTEFUL       # never anything sexual, whatever the prompt said
+        neg = TASTEFUL_NEG + ", " + neg
     elif level in ("young-kids", "kids", "middle-grade", "family"):
         neg += ", scary, gore, violence"
     try:
         r = requests.post(cfg["LOCAL_IMAGE_URL"].rstrip("/") + "/sdapi/v1/txt2img", timeout=900, json={
             "prompt": prompt[:1500], "negative_prompt": neg, "width": w, "height": h,
-            "steps": int(cfg["LOCAL_IMAGE_STEPS"]), "cfg_scale": float(cfg["LOCAL_IMAGE_CFG"]), "seed": -1,
+            "steps": int(cfg["LOCAL_IMAGE_STEPS"]), "cfg_scale": float(cfg["LOCAL_IMAGE_CFG"]), "seed": seed,
             "batch_size": 1})
     except requests.ConnectionError:
         raise RuntimeError(f"Can't reach the picture app at {cfg['LOCAL_IMAGE_URL']}. In Draw Things, turn on "
@@ -1703,11 +1932,13 @@ def make_cover(cfg, story, out_dir, level):
         return out if out.exists() else None
     raw = out_dir / ".cover.png"
     look = ". ".join(x for x in ((story.get("user_style") or {}).get("pictures"), story.get("visual_style", "")) if x)
-    prompt = (f"Book cover art for the story \"{story['title']}\": {story.get('logline', '')}. "
-              f"{look}. Characters: {story.get('characters', '')}. "
+    logline, chars = story.get("logline", ""), story.get("characters", "")
+    if level in ("mature", "explicit"):
+        logline, chars = picture_safe(logline, level), picture_safe(chars, level)
+    prompt = (f"Book cover art: {logline}. {look}. Characters: {chars}. "
               "Beautiful, cinematic, evocative. No text, no title, no lettering.")
     try:
-        local_image(cfg, prompt, 1024, 1024, raw, level)
+        local_image(cfg, prompt, 1024, 1024, raw, level, story_seed(story))
         Image.open(raw).convert("RGB").save(out, quality=90)
         return out
     except Exception as e:
@@ -1838,8 +2069,7 @@ def picture_for(cfg, story, i, w, h, portrait, job, provider, ref):
         elif provider == "gemini":
             gemini_image(cfg, shot_prompt(story, sc, "image"), portrait, raw, ref)
         elif provider == "local":
-            lw, lh = (576, 1024) if portrait else (1024, 576)
-            local_image(cfg, shot_prompt(story, sc, "image"), lw, lh, raw, story.get("level", "family"))
+            local_picture(cfg, story, shot_prompt(story, sc, "image", local=True), portrait, raw, story_seed(story))
         else:
             title_card(sc.get("heading", ""), w, h, raw, i)
     except Exception as e:
@@ -1847,6 +2077,56 @@ def picture_for(cfg, story, i, w, h, portrait, job, provider, ref):
         title_card(sc.get("heading", ""), w, h, raw, i)
     fit_cover(Image.open(raw), w, h).save(out)
     raw.unlink(missing_ok=True)
+    return out
+
+
+def local_picture(cfg, story, prompt, portrait, raw, seed):
+    """A picture from the picture app on this computer, with a second and third try (it may be busy or just
+    opening). Raises if it still can't."""
+    lw, lh = (576, 1024) if portrait else (1024, 576)
+    for attempt in range(3):
+        try:
+            return local_image(cfg, prompt, lw, lh, raw, story.get("level", "family"), seed)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            log(f"Picture app: {str(e)[:120]}. Trying again in 15 seconds.")
+            time.sleep(15)
+
+
+def extra_picture(cfg, story, i, k, sentence, w, h, portrait, job):
+    """Another picture for a long scene, of a later moment in it, in the same look (local pictures only)."""
+    out = job / f"pic_{i + 1:02d}_{k}.png"
+    if out.exists():
+        return out
+    sc = story["scenes"][i]
+    raw = job / f"raw_{i + 1:02d}_{k}.png"
+    base = f"{sentence.rstrip(' .!?')}. Same place as before: {sc.get('image_prompt', '')[:240]}"
+    try:
+        local_picture(cfg, story, shot_prompt(story, sc, "image", base=base, local=True), portrait, raw,
+                      story_seed(story, k))
+        fit_cover(Image.open(raw), w, h).save(out)
+        return out
+    except Exception as e:
+        log(f"Extra picture for scene {i + 1} skipped ({str(e)[:100]}).")
+        return None
+    finally:
+        raw.unlink(missing_ok=True)
+
+
+def scene_moments(story, i, n):
+    """n - 1 later moments in a scene to draw, as sentences from the text: narration, not dialogue, and (for
+    grown-up stories) nothing that a safe picture can't show."""
+    sc = story["scenes"][i]
+    level = story.get("level", "family")
+    sents = [s_ for s_ in split_sentences(sc.get("narration", "")) if "“" not in s_ and '"' not in s_
+             and len(s_.split()) >= 6]
+    if level in ("mature", "explicit"):
+        sents = [s_ for s_ in sents if not PICTURE_UNSAFE.search(s_)]
+    out = []
+    for k in range(1, n):
+        part = [s_ for j, s_ in enumerate(sents) if k / n <= (j + 0.5) / max(1, len(sents)) < (k + 1) / n]
+        out.append(part[0] if part else "")
     return out
 
 
@@ -1865,7 +2145,8 @@ def make_pictures(cfg, story, job, w, h, portrait, which, ref):
         count[0] += 1
         report(step, lo + (hi - lo) * count[0] / len(idxs), f"Drawing pictures: {count[0]} of {len(idxs)}", image=pic)
         return i, pic
-    with cf.ThreadPoolExecutor(max_workers=3) as pool:
+    workers = 1 if provider == "local" else 3              # the Mac's picture app draws one at a time anyway
+    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
         return dict(pool.map(one, idxs))
 
 
@@ -2585,9 +2866,59 @@ def plan_sounds(cfg, story, level, redo=False):
                 if best[0] == "bedroom" and level not in ("mature", "explicit"):
                     hit = None
                 item = {"ambience": best[1][1] if hit else "none", "effects": []}
-            fx = [f_ for f_ in (item.get("effects") or []) if isinstance(f_, dict) and f_.get("sound")][:max_fx]
-            sc["sound"] = {"ambience": str(item.get("ambience") or "none").strip()[:80],
-                           "effects": [{"sound": str(f_["sound"])[:60], "at": str(f_.get("at", ""))[:120]} for f_ in fx]}
+            fx, used = [], set()
+            for f_ in item.get("effects") or []:
+                if not isinstance(f_, dict) or not str(f_.get("sound") or "").strip():
+                    continue
+                snd_name = str(f_["sound"]).strip()[:60]
+                at = fx_anchor(sc["narration"], snd_name, str(f_.get("at", "")))
+                if at is None or (snd_name.lower(), at) in used:          # nowhere it fits, or the same twice
+                    log(f"Sound '{snd_name}' left out of scene {i + 1}: no matching moment in the text")
+                    continue
+                used.add((snd_name.lower(), at))
+                fx.append({"sound": snd_name, "at": at})
+            sc["sound"] = {"ambience": str(item.get("ambience") or "none").strip()[:80], "effects": fx[:max_fx]}
+
+
+def _norm_words(s):
+    return re.sub(r"[^a-z0-9' ]", " ", (s or "").lower().replace("’", "'")).split()
+
+
+SOUND_HINTS = {   # words in the text that show where a sound belongs, for common effects
+    "door": "door|doors|doorway|knock\\w*", "knock": "knock\\w*|door", "footsteps": "step\\w*|walk\\w*|footstep\\w*|stair\\w*",
+    "phone": "phone|ring\\w*|buzz\\w*|vibrat\\w*|text\\w*|call\\w*", "glass": "glass\\w*|toast\\w*|wine|drink\\w*",
+    "thunder": "thunder\\w*|storm\\w*|lightning", "car": "car|engine|drove|drive\\w*|tyres?|tires?",
+    "kiss": "kiss\\w*|lips", "breathing": "breath\\w*|pant\\w*|gasp\\w*", "bed": "bed|mattress|sheets",
+    "gunshot": "shot|shoot\\w*|gun\\w*|fired", "dog": "dog|bark\\w*", "laugh": "laugh\\w*|giggl\\w*",
+}
+
+
+def fx_anchor(narration, sound, at):
+    """Where in the scene a sound effect belongs, as words copied from the text. The writer's own words are used
+    when they're really in the scene; otherwise the sentence that best matches the sound; None if nothing fits."""
+    text_w = _norm_words(narration)
+    joined = " " + " ".join(text_w) + " "
+    aw = _norm_words(at)
+    for n in (len(aw), 6, 4, 3):                          # the writer's words, exactly or a run of them
+        if n < 3 or n > len(aw):
+            continue
+        for k in range(0, len(aw) - n + 1):
+            probe = " ".join(aw[k:k + n])
+            if " " + probe + " " in joined:
+                return probe
+    sents = split_sentences(narration)
+    keys = set(_words(sound)) | set(w for w in aw if len(w) > 3 and w not in GENERIC_WORDS)
+    hint = "|".join(v for k, v in SOUND_HINTS.items() if k in (sound or "").lower())
+    best, best_score = None, 0
+    for s_ in sents:
+        sw = set(_norm_words(s_))
+        score = len(sw & keys) * 2 + (2 * len(re.findall(r"\b(?:" + hint + r")\b", s_.lower())) if hint else 0)
+        score += sum(1 for k in keys for w in sw if len(k) > 4 and w.startswith(k[:5]) and w != k)
+        if score > best_score:
+            best, best_score = s_, score
+    if best and best_score >= 2:
+        return " ".join(_norm_words(best)[:7])
+    return None
 
 
 # ── finding real recordings: your files first, then Freesound (downloaded once, kept with credits) ──
@@ -2641,9 +2972,11 @@ def find_sound(cfg, query, kind, level):
         return None, None
     base = cfg.get("FREESOUND_URL", "https://freesound.org").rstrip("/")
     dur = "duration:[25 TO 1200]" if kind == "ambience" else "duration:[0.3 TO 12]"
-    for attempt in (" ".join(words), " ".join(words[:2])):
-        if not attempt:
-            continue
+    tries = []
+    for t_ in (" ".join(words), " ".join(words[:2]), " ".join(words[-2:]), words[-1] if words else ""):
+        if t_ and t_ not in tries:
+            tries.append(t_)
+    for attempt in tries:
         try:
             r = requests.get(f"{base}/apiv2/search/text/", timeout=30, params={
                 "query": attempt, "token": token, "page_size": 15, "sort": "score",
@@ -2688,20 +3021,26 @@ def find_sound(cfg, query, kind, level):
 
 
 def _anchor_time(seg, phrase):
-    """When, in this scene, the words `phrase` are spoken (start of the line containing them)."""
+    """When, in this scene, the words `phrase` are spoken: the line that holds them, and how far into it."""
     lines = seg["lines"]
-    norm = lambda s: re.sub(r"[^a-z0-9 ]", "", s.lower())
-    ph = norm(phrase)
-    for n_words in (4, 2):                    # exact words first, then a looser match
-        probe = " ".join(ph.split()[:n_words])
-        if not probe:
-            break
+    ph = _norm_words(phrase)
+    if ph:
+        for n_words in (min(6, len(ph)), 4, 3, 2):            # the longest run of the words that's in one line
+            for k in range(0, max(1, len(ph) - n_words + 1)):
+                probe = " " + " ".join(ph[k:k + n_words]) + " "
+                for ln in lines:
+                    text = " " + " ".join(_norm_words(ln["text"])) + " "
+                    pos = text.find(probe)
+                    if pos >= 0:
+                        frac = pos / max(1, len(text))
+                        return ln["start"] + frac * (ln["end"] - ln["start"])
+        best, best_n = None, 1                                  # most words in common
         for ln in lines:
-            text = norm(ln["text"])
-            pos = text.find(probe)
-            if pos >= 0:
-                frac = pos / max(1, len(text))
-                return ln["start"] + frac * (ln["end"] - ln["start"])
+            n_ = len(set(ph) & set(_norm_words(ln["text"])))
+            if n_ > best_n:
+                best, best_n = ln, n_
+        if best:
+            return best["start"] + 0.3
     return (lines[0]["start"] if lines else seg["start"]) + 0.8      # no words given or found: early in the scene
 
 
@@ -2733,6 +3072,15 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
         plan = (sc.get("sound") or {}) if with_sounds else {}
         inputs, chains, labels = ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=44100:cl=stereo"], [], ["[0:a]"]
         amb, credit = find_sound(cfg, plan.get("ambience"), "ambience", level)
+        if not amb and str(plan.get("ambience") or "none").lower() != "none":   # nothing for that phrase: a simpler one
+            words_ = sc.get("narration", "").lower()
+            for name_, (pat_, query_) in AMBIENCE_FALLBACK.items():
+                if name_ == "bedroom" and level not in ("mature", "explicit"):
+                    continue
+                if re.search(r"\b(?:" + pat_ + r")\b", words_) or set(_words(plan.get("ambience"))) & set(_words(query_)):
+                    amb, credit = find_sound(cfg, query_, "ambience", level)
+                    if amb:
+                        break
         k = 1
         if amb:
             credits.append(credit)
@@ -2742,18 +3090,26 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
                           f"afade=t=in:d={fade:.2f},afade=t=out:st={max(0, dur - fade):.2f}:d={fade:.2f}[a{k}]")
             labels.append(f"[a{k}]")
             k += 1
-        for fx in plan.get("effects") or []:
-            at = _anchor_time(seg, fx.get("at", ""))
+        timed = sorted(((_anchor_time(seg, fx.get("at", "")), fx) for fx in plan.get("effects") or []),
+                       key=lambda p_: p_[0])
+        last_at = -99.0
+        for at, fx in timed:
             if at is None:
+                continue
+            at = max(at, last_at + 1.5)                          # effects never pile on top of each other
+            if at > seg["end"] - 0.5:
                 continue
             f_, credit = find_sound(cfg, fx.get("sound"), "effect", level)
             if not f_:
                 continue
+            last_at = at
             credits.append(credit)
             delay = max(0, int((at - seg["start"]) * 1000))
             fx_gain = float(cfg["EFFECTS_VOLUME"])
+            room = max(1.0, min(8.0, seg["end"] - at))           # short, and faded out before the scene ends
             inputs += ["-i", str(leveled(f_, -26))]
-            chains.append(f"[{k}:a]volume={fx_gain:.3f},adelay={delay}|{delay}[a{k}]")
+            chains.append(f"[{k}:a]atrim=0:{room:.2f},afade=t=out:st={max(0.0, room - 0.6):.2f}:d=0.6,"
+                          f"volume={fx_gain:.3f},adelay={delay}|{delay}[a{k}]")
             labels.append(f"[a{k}]")
             k += 1
         if k == 1:
@@ -2903,18 +3259,34 @@ AFMT = "aformat=sample_rates=44100:channel_layouts=stereo"
 
 
 def still_segment(cfg, pic, cap, wav, seg, w, h, zoom_in=True, fps=30):
+    """One part of the video from one or more pictures: a slow push in or out across the whole part (never a
+    sudden stop), and a soft cross-fade from one picture to the next."""
+    pics = [p_ for p_ in (pic if isinstance(pic, (list, tuple)) else [pic]) if p_]
     secs = duration(wav) + 0.6
-    frames = int(secs * fps)
-    if cfg["MOTION"] == "on":
-        z = "min(1+0.0009*on,1.12)" if zoom_in else "max(1.12-0.0009*on,1)"
-        bg = (f"[0]scale={w * 2}:{h * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-              f":d={frames}:s={w}x{h}:fps={fps}[bg]")
-        inputs = ["-i", str(pic)]
-    else:
-        bg = f"[0]scale={w}:{h},fps={fps}[bg]"
-        inputs = ["-loop", "1", "-t", f"{secs:.2f}", "-i", str(pic)]
+    n = len(pics)
+    part = secs / n
+    fade = min(1.0, part / 4) if n > 1 else 0
+    inputs, chains = [], []
+    for k, p_ in enumerate(pics):
+        length = part + fade
+        frames = max(2, int(length * fps))
+        if cfg["MOTION"] == "on":
+            zi = zoom_in if k % 2 == 0 else not zoom_in
+            step = 0.12 / frames
+            z = f"min(1+{step:.6f}*on,1.12)" if zi else f"max(1.12-{step:.6f}*on,1)"
+            chains.append(f"[{k}]scale={w * 2}:{h * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                          f":d={frames}:s={w}x{h}:fps={fps},setsar=1,format=yuv420p[p{k}]")
+            inputs += ["-i", str(p_)]
+        else:
+            chains.append(f"[{k}]scale={w}:{h},fps={fps},setsar=1,format=yuv420p[p{k}]")
+            inputs += ["-loop", "1", "-t", f"{length:.2f}", "-i", str(p_)]
+    cur = "[p0]"
+    for k in range(1, n):
+        chains.append(f"{cur}[p{k}]xfade=transition=fade:duration={fade:.2f}:offset={k * part:.2f}[x{k}]")
+        cur = f"[x{k}]"
+    chains.append(f"{cur}[{n}]overlay=0:0,format=yuv420p[v];[{n + 1}]apad,{AFMT}[a]")
     run(["ffmpeg", "-y", "-v", "error", *inputs, "-i", str(cap), "-i", str(wav),
-         "-filter_complex", f"{bg};[bg][1]overlay=0:0,format=yuv420p[v];[2]apad,{AFMT}[a]",
+         "-filter_complex", ";".join(chains),
          "-map", "[v]", "-map", "[a]", "-t", f"{secs:.2f}", *ENC, str(seg)])
 
 
@@ -2952,6 +3324,22 @@ def make_video(cfg, story, wavs, job, work, w, h, portrait, out_path, vprovider,
     else:
         title_pic = pics[0]
 
+    extras = {}            # long scenes get more than one picture, when pictures are free (drawn on this Mac)
+    if pick_image_provider(cfg) == "local" and cfg.get("MORE_PICTURES", "on") == "on":
+        every = max(15, int(cfg.get("SECONDS_PER_PICTURE", "40")))
+        todo = [(i, min(4, int((duration(wavs[i + 1]) + 0.6) // every) + 1)) for i, c in enumerate(clips) if c is None]
+        todo = [(i, n) for i, n in todo if n > 1]
+        total, done = sum(n - 1 for _, n in todo), 0
+        for i, n in todo:
+            for k, sentence in enumerate(scene_moments(story, i, n), start=1):
+                if not sentence:
+                    continue
+                p_ = extra_picture(cfg, story, i, k, sentence, w, h, portrait, job)
+                done += 1
+                report("video", 0.80, f"Drawing more pictures for long scenes: {done} of {total}", image=p_)
+                if p_:
+                    extras.setdefault(i, []).append(p_)
+
     log("Building the video…")
     segs = []
     cap = work / "cap_00.png"
@@ -2965,7 +3353,7 @@ def make_video(cfg, story, wavs, job, work, w, h, portrait, out_path, vprovider,
         if clips[i]:
             clip_segment(cfg, clips[i], cap, wavs[i + 1], segs[-1], w, h)
         else:
-            still_segment(cfg, pics[i], cap, wavs[i + 1], segs[-1], w, h, zoom_in=i % 2 == 1)
+            still_segment(cfg, [pics[i]] + extras.get(i, []), cap, wavs[i + 1], segs[-1], w, h, zoom_in=i % 2 == 1)
         log(f"Video part {i + 1}/{len(scenes)} done")
         report("video", 0.80 + 0.20 * (i + 1) / len(scenes), f"Putting the video together: part {i + 1} of {len(scenes)}")
     lst = work / "video_list.txt"
@@ -3706,6 +4094,8 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
         if len(new.split()) < 40:
             raise ValueError(f"The writer sent back almost nothing for scene {i + 1}. Try again.")
         new = proofread(cfg, new, EXPLICIT_SYSTEM if adult else None)
+        new = fix_sentences(cfg, new, EXPLICIT_SYSTEM if adult else None,
+                            [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)])
         if adult:
             new = adult_guard(cfg, new, EXPLICIT_SYSTEM)
         sc["narration"] = new

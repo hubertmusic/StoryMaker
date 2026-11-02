@@ -5,3 +5,5 @@ pillow
 # Free, smooth local voices (needs Python 3.10 or newer). Optional.
 kokoro-onnx
 soundfile
+# spell checking for the sentence checker (optional; without it, the other checks still run)
+pyspellchecker

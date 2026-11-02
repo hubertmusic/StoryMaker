@@ -599,6 +599,12 @@ Press **Style** at the top of StoryMaker to teach it your taste.
   broken or jumbled sentences, and makes it clear who is speaking in every exchange. It keeps the events,
   length, style and heat. It roughly doubles the writing time; untick **Proofread every scene** under More
   options to skip it. (Setting: `PROOFREAD=on` in storymaker.env.)
+- **Sentence check:** after proofreading, every scene is checked by rule (not by AI) for badly built sentences:
+  very long or run-on sentences, two sentences joined by only a comma, the same word twice in a row, quotes
+  that don't open and close, the same sentence twice, three sentences in a row starting with the same word, and
+  likely misspellings. Small things (doubled words, stray spaces, a missing capital) are fixed directly. The rest
+  go back to the writer as a numbered list, and only those sentences are rewritten, up to twice. A fix is kept only
+  when it has fewer problems and keeps the length. It's part of **Proofread every scene**.
 - **Fresh names:** every story gets its own random set of names to choose from, and the overused ones (Mira,
   Jake, Elara, Lily…) and names from your recent stories are left out. Names you write in the idea are kept.
 - **More voices and accents:** French, Spanish, Italian, Brazilian, Indian, Japanese and Chinese accents, plus
@@ -606,3 +612,25 @@ Press **Style** at the top of StoryMaker to teach it your taste.
   Audio Studio's cast.
 - **Faster local writing:** on the Mac, give Ollama these two settings once, then quit and reopen Ollama:
   `launchctl setenv OLLAMA_FLASH_ATTENTION 1` and `launchctl setenv OLLAMA_KV_CACHE_TYPE q8_0`.
+
+## 15. Sounds, pictures and video
+
+- **Sound effects land on the right words.** Every effect is checked against the scene's text. If the AI's "when"
+  words aren't really in the scene, the sentence that best matches the sound is used instead (a phone ringing goes
+  to the sentence about the phone). An effect that fits nowhere is left out rather than played at a random moment.
+  Effects never pile on top of each other, are kept short and fade out before the scene ends. If no recording
+  is found for a background, a simpler one that matches the scene is tried.
+- **Pictures stay consistent.** With Draw Things, every picture in a story uses the same seed, so faces, clothes
+  and the look stay the same. The shot comes first in the prompt (picture apps read the start most closely).
+  Pictures are drawn one at a time, and the picture app gets two more tries if it's busy or just opening.
+- **Longer scenes get more pictures.** In video mode with Draw Things, a scene gets a new picture of a later moment
+  every 40 seconds (up to 4 per scene), with a slow push in or out across the whole picture and a soft fade
+  between them. Settings: `MORE_PICTURES=on`, `SECONDS_PER_PICTURE=40`.
+- **Pictures for Explicit stories.** Explicit stories can have a cover, a picture book and a moving-picture video,
+  all drawn by Draw Things on your Mac; nothing leaves the computer. They are always tasteful: everyone is an
+  adult and fully clothed. Anything sexual in a picture prompt is taken out before it reaches Draw Things, which
+  also gets a strong "never show" list. To turn it on:
+  1. Open Draw Things, then Settings → API Server: turn it on, HTTP, port 7860. Keep the app open.
+  2. In `~/StoryMaker/storymaker.env`: `LOCAL_IMAGE_URL=http://host.docker.internal:7860`.
+     For SDXL Turbo or Lightning models, also `LOCAL_IMAGE_STEPS=4` and `LOCAL_IMAGE_CFG=1.5`.
+  3. `cd ~/StoryMaker && docker compose up -d`. The Video choice and the picture book then work for Explicit.

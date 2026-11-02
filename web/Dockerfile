@@ -7,7 +7,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /opt/venv \
- && /opt/venv/bin/pip install --no-cache-dir requests pillow edge-tts kokoro-onnx soundfile
+ && /opt/venv/bin/pip install --no-cache-dir requests pillow edge-tts kokoro-onnx soundfile pyspellchecker
 
 # Kokoro: smooth narrator and character voices that run inside this container (free, private)
 ADD https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx /opt/kokoro/
