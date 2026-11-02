@@ -60,6 +60,12 @@ Step 5, **Listen**, has these downloads:
   folder inside the story. A video keeps its own soundtrack. Remaking the audio in StoryMaker later replaces
   it again.
 
+## Acting and speed
+
+In step 4, **Record**, the **Acting** slider goes from a calm, even reading to a big, dramatic performance. The
+**Chatterbox version** picks between best acting (standard) and about twice as fast (turbo). Both are per
+book, and changing either records the lines again.
+
 ## Set it up (once)
 
 StoryMaker must already be running. Then, in Terminal:

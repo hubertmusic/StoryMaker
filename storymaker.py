@@ -142,6 +142,7 @@ DEFAULTS = {
 
     "BOOK": "on",                          # picture-book PDF in video mode (free: uses the video's frames)
     "LEVEL": "family",                     # default reading level (see --level)
+    "PROOFREAD": "on",                     # a copy editor's pass over every scene: spelling, grammar, clear dialogue
     "ADULT_CONTENT": "off",                # on = allow the Explicit (18+) level (local Ollama only)
     "OLLAMA_ADULT_MODEL": "dolphin3",      # the local model used for Explicit stories
     "OLLAMA_TEMPERATURE": "0.9",           # livelier writing; lower = safer, plainer
@@ -628,6 +629,99 @@ def keywords_block(kws, written="", last=False, whole=False):
     return line + "\n"
 
 
+# ── names: a fresh set for every story, so the same few names don't keep coming back ──
+FEMALE_NAMES = """Ada Adaeze Adelaide Aisha Alana Alba Alma Amara Amelie Anais Annika Aria Ashlyn Astrid Aurelia Ava Beatrix
+Bianca Bree Briar Callie Camila Carmen Cassia Celeste Clara Coralie Dahlia Daphne Delia Eden Eliza Elodie Emeka Esme
+Estelle Etta Evangeline Farah Felicity Fiona Freya Gemma Georgia Greta Hadley Hana Harper Hazel Helena Imani Ines Ingrid
+Iris Isadora Ivy Jada Jasmine Joelle Josephine Juniper Kaia Kalani Keira Kiara Lainey Lana Leah Leila Lena Liv Lorelei
+Lucia Luna Lydia Mabel Maeve Magnolia Maren Marisol Matilda Maya Meadow Mei Mila Mirela Nadia Naomi Nell Nia Nina Noemi
+Octavia Odette Olive Ophelia Paloma Pearl Penelope Phoebe Piper Poppy Priya Quinn Rae Ramona Raven Reese Renata Rhea
+Rosalind Rowan Ruby Sabine Sadie Saoirse Selah Selena Serena Sienna Simone Sloane Sofia Stella Talia Tamsin Tess Thea
+Valentina Vera Violet Willa Wren Ximena Yara Yasmin Zadie Zara Zoe Zuri""".split()
+MALE_NAMES = """Aarav Abel Ace Adrian Alaric Alden Alejandro Amir Anders Andre Ansel Archer Arlo Asher Atticus August Axel Beau
+Bennett Bodhi Brooks Caleb Callum Calvin Cassius Cedric Cillian Colt Conrad Cormac Cyrus Dalton Damon Dante Darius Declan
+Desmond Dorian Eamon Elias Elliot Emeric Emil Emmett Enzo Ezra Felix Finn Fletcher Gideon Graham Grady Gunnar Hale Harlan
+Hayes Hendrix Hugo Idris Ignatius Ike Isaac Jasper Jonah Jude Julian Kai Kaleb Keanu Kellan Kian Knox Lachlan Landon Leif
+Leo Levi Lorenzo Luca Lucian Magnus Malik Marcus Mateo Micah Miles Nash Nico Nikolai Oisin Omar Orion Oscar Otis Pax
+Pierce Quentin Rafael Reid Remy Rhys Roman Rowan Rufus Ryker Santiago Sawyer Silas Soren Tate Teo Theo Thiago Tobias Tristan
+Vance Vaughn Victor Wade Wells Wesley Wilder Xavier Yusuf Zane Zeke""".split()
+SURNAMES = """Abara Achterberg Adeyemi Alcott Alvarez Ashford Bader Ballard Barlow Beaumont Bishop Blackwood Bramble Brennan
+Calloway Carrow Castellano Chandra Cole Corbin Crane Dalca Delacroix Devereux Donovan Draper Ellery Ellison Esposito Everly
+Fairfax Farrow Fennimore Ferreira Fitzgerald Fontaine Garrison Greer Hale Halloran Harrow Hawthorne Holloway Ibarra Iyer
+Jansen Kaur Kensington Kowalski Lancaster Larkin Lowell Lucero Mackenzie Madsen Marchetti Mercer Monroe Moreau Nakamura
+Navarro Nightingale Novak Okafor Oduya Pemberton Petrov Quill Ramsey Reyes Rhodes Rios Rourke Salazar Sato Sinclair Solberg
+Sterling Sullivan Tanaka Thorne Torres Vance Vasquez Vega Whitlock Winslow Wolfe Yates Zamora""".split()
+OVERUSED = {"mira", "jake", "elara", "lily", "sam", "luna", "kai", "lyra", "aria", "ethan", "emma", "alex", "jack",
+            "sarah", "max", "zara", "elena", "liam", "mia", "eli", "evelyn", "seraphina", "orion", "caleb", "marcus"}
+
+
+def recent_names(cfg):
+    f = Path(os.path.expanduser(cfg["OUTPUT_DIR"])) / ".recent-names.json"
+    try:
+        return f, json.loads(f.read_text())
+    except (OSError, ValueError):
+        return f, []
+
+
+def name_ideas(cfg, seed=None):
+    """A random handful of first names and surnames for this story, skipping overused ones and names from your
+    recent stories."""
+    _, used = recent_names(cfg)
+    skip = OVERUSED | {n.lower() for n in used}
+    rnd = random.Random(seed)
+    pick = lambda pool, n: rnd.sample([x for x in pool if x.lower() not in skip] or pool, n)
+    return pick(FEMALE_NAMES, 6), pick(MALE_NAMES, 6), pick(SURNAMES, 6)
+
+
+def names_rule(cfg, seed=None):
+    f, m, last = name_ideas(cfg, seed)
+    return (f"\nNames: give new characters fresh, fitting names, not the usual ones (never Mira, Jake, Elara, Lily, Sam, "
+            f"Luna, Kai or Lyra unless the reader asked). Choose from these where they fit: women {', '.join(f)}; "
+            f"men {', '.join(m)}; surnames {', '.join(last)}. Names the reader gave keep exactly as written.\n")
+
+
+def remember_names(cfg, story):
+    """Names just used go on the recent list, so the next stories pick others."""
+    f, used = recent_names(cfg)
+    new = [c["name"].split()[0] for c in story.get("cast") or [] if c.get("name")]
+    used = [n for n in used if n not in new] + new
+    try:
+        f.write_text(json.dumps(used[-40:]))
+    except OSError:
+        pass
+
+
+WRITING_CRAFT = ("\nCraft: write clean, natural English. Every sentence is complete and grammatical, with correct spelling "
+                 "and no run-ons, fragments by accident, repeated words or jumbled word order. In dialogue, it's always "
+                 "clear who is speaking: give a speaker's first line in each exchange a short speech tag with their "
+                 "name (\"Mira said\"), and give each character their own consistent way of talking.\n")
+
+PROOF_PROMPT = """You are a careful copy editor. Fix this passage of a story so it reads cleanly:
+- spelling, grammar and punctuation;
+- broken, run-on, jumbled or repeated sentences and words;
+- dialogue: make sure it's always clear who is speaking (add a short speech tag like "Mira said" where it isn't),
+  each speaker keeps their own way of talking, and every line of dialogue is in “double quotes”.
+Change nothing else: keep the events, the details, the length, the style, the characters' names and how explicit
+it is. Don't add or remove scenes, don't soften or summarize, don't comment. Reply with only the corrected passage.
+{extra}
+---
+{text}
+---"""
+
+
+def proofread(cfg, text, system=None, extra=""):
+    """A copy editor's pass over one scene. If the result looks wrong (much shorter or longer), the original is kept."""
+    if cfg.get("PROOFREAD", "on") != "on" or cfg["STORY_PROVIDER"].lower() == "demo" or len(text.split()) < 40:
+        return text
+    try:
+        new = clean_prose(ask_writer(cfg, PROOF_PROMPT.format(text=text, extra=extra), as_json=False, system=system))
+    except Exception as e:
+        log(f"Proofreading skipped ({str(e)[:100]})")
+        return text
+    a, b = len(text.split()), len(new.split())
+    return new if 0.85 * a <= b <= 1.25 * a else text
+
+
 # ── your style: how you want stories written, and how pictures, video and sounds should feel (from the web page) ──
 GROWN_UP = ("mature", "explicit")
 
@@ -764,6 +858,9 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
     audience, rules, length = level_info(level)
     rules += style_rules(cfg.get("_PREFS"), level)
     rules += style_block(cfg.get("_STYLE"), level)
+    rules += WRITING_CRAFT
+    if not series:
+        rules += names_rule(cfg, seed=str(job) if job else None)
     length *= DETAIL.get(detail, 1.0)
     lo, hi = (20, 28) if clip_mode else (120, 200) if chapters > 1 else (60, 110)   # clips need short narration
     if not clip_mode:
@@ -823,6 +920,23 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
         for c in story.get("cast", []):
             c["voice"] = {"girl": "female", "boy": "male"}.get(c.get("voice"), c.get("voice"))
     lock_written_cast(story, declared)
+    if cfg.get("PROOFREAD", "on") == "on" and provider != "demo":
+        system = EXPLICIT_SYSTEM if level == "explicit" else None
+        for i, sc in enumerate(story.get("scenes", [])):
+            if sc.get("proofread"):
+                continue
+            report("writing", 0.97, f"Proofreading scene {i + 1} of {len(story['scenes'])}")
+            text = proofread(cfg, sc.get("narration", ""), system)
+            if level == "explicit":
+                try:
+                    text = adult_guard(cfg, text, system)
+                except SceneRedo:
+                    text = sc["narration"]                     # keep the checked version from before
+            if text != sc.get("narration"):
+                sc["narration"] = text
+                sc["lines"] = lines_from_prose(text, story.get("cast") or [])
+            sc["proofread"] = True
+    remember_names(cfg, story)
     story["level"] = level
     return story
 
@@ -1960,8 +2074,29 @@ KOKORO_CATALOGUE = [
     ("am_puck", "Puck", "male", "American", "lively"), ("am_echo", "Echo", "male", "American", "light, youthful"),
     ("bm_george", "George", "male", "British", "classic"), ("bm_fable", "Fable", "male", "British", "storyteller"),
     ("bm_daniel", "Daniel", "male", "British", "calm"), ("bm_lewis", "Lewis", "male", "British", "older"),
+    ("am_santa", "Nick", "male", "American", "jolly, deep"),
+    # other accents: these voices speak English with their own accent
+    ("ff_siwis", "Siwis", "female", "French accent", "soft, elegant"),
+    ("ef_dora", "Dora", "female", "Spanish accent", "warm"), ("em_alex", "Alejandro", "male", "Spanish accent", "friendly"),
+    ("em_santa", "Santiago", "male", "Spanish accent", "deep"),
+    ("if_sara", "Sara", "female", "Italian accent", "bright"), ("im_nicola", "Nicola", "male", "Italian accent", "smooth"),
+    ("pf_dora", "Lúcia", "female", "Brazilian accent", "gentle"), ("pm_alex", "Paulo", "male", "Brazilian accent", "easygoing"),
+    ("pm_santa", "Rafael", "male", "Brazilian accent", "deep"),
+    ("hf_alpha", "Priya", "female", "Indian accent", "clear"), ("hf_beta", "Ananya", "female", "Indian accent", "soft"),
+    ("hm_omega", "Arjun", "male", "Indian accent", "calm"), ("hm_psi", "Rohan", "male", "Indian accent", "bright"),
+    ("jf_alpha", "Yuki", "female", "Japanese accent (strong)", "light"), ("jm_kumo", "Kenji", "male", "Japanese accent (strong)", "steady"),
+    ("zf_xiaobei", "Mei", "female", "Chinese accent (strong)", "bright"), ("zm_yunxi", "Wei", "male", "Chinese accent (strong)", "calm"),
+    # lighter accents: an English voice blended with an accented one
+    ("af_bella+ff_siwis", "Camille", "female", "light French accent", "warm"),
+    ("bf_emma+if_sara", "Giulia", "female", "light Italian accent", "bright"),
+    ("af_sarah+pf_dora", "Luiza", "female", "light Brazilian accent", "friendly"),
+    ("af_nicole+hf_alpha", "Maya", "female", "light Indian accent", "soft"),
+    ("am_michael+em_alex", "Mateo", "male", "light Spanish accent", "warm"),
+    ("bm_george+im_nicola", "Marco", "male", "light Italian accent", "classic"),
+    ("am_eric+hm_omega", "Dev", "male", "light Indian accent", "confident"),
+    ("am_liam+pm_alex", "Lucas", "male", "light Brazilian accent", "young"),
 ]
-VOICE_SPEC = re.compile(r"^[ab][fm]_[a-z]+(\+[ab][fm]_[a-z]+)?(\^(0\.[89]\d?|1\.[01]\d?))?$")
+VOICE_SPEC = re.compile(r"^[abefhijpz][fm]_[a-z]+(\+[abefhijpz][fm]_[a-z]+)?(\^(0\.[89]\d?|1\.[01]\d?))?$")
 SAMPLE_TEXT = ("Hello. This is how I sound when I read your story. "
                "“Are you coming with me?” she asked. “Always,” he said, and smiled.")
 
@@ -2068,9 +2203,26 @@ DEFAULT_VOICE_KEY = {"elevenlabs": "ELEVENLABS_VOICE_ID", "openai": "OPENAI_VOIC
                      "say": "SAY_VOICE", "edge": "EDGE_VOICE", "kokoro": "KOKORO_VOICE"}
 
 
+def tts_clean(text):
+    """What a voice reads: no stray symbols or formatting, natural pauses, nothing it would stumble over."""
+    t = str(text or "")
+    t = re.sub(r"[*_#`~|<>\[\]{}]+", "", t)                    # markdown and stray symbols
+    t = re.sub(r"\s*[—–]\s*", ", ", t)                          # dashes read as a pause
+    t = re.sub(r"\.{4,}|…", "...", t)
+    t = re.sub(r"([!?])\1+", r"\1", t)                          # "!!!" → "!"
+    t = re.sub(r"\b([A-Z]{4,})\b", lambda m: m.group(1).capitalize(), t)   # SHOUTED words read normally
+    t = re.sub(r"\b(\w+)( \1\b)+", lambda m: m.group(0) if m.group(1).lower() in ("had", "that", "is", "do", "very")
+               else m.group(1), t, flags=re.I)                   # "the the" (but "had had" is fine)
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)
+    t = re.sub(r"([,.!?;:])(?=[A-Za-z])", r"\1 ", t)
+    t = re.sub(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", "", t)    # emoji
+    return re.sub(r"\s{2,}", " ", t).strip(" ,") or str(text or "")
+
+
 def narrate(cfg, text, out_wav, engine, voice=None, style=None):
     """Speak `text` into out_wav. `voice` overrides the engine's narrator voice; `style` is an
     acting note used by engines that accept one (OpenAI, Gemini)."""
+    text = tts_clean(text)
     tmp = out_wav.with_suffix(".src")
     rate = None
     voice = voice or cfg.get(DEFAULT_VOICE_KEY.get(engine, ""), "")
@@ -2197,6 +2349,13 @@ def assign_voices(cfg, engine, cast, saved=None):
 def speak_line(cfg, text, wav, engine, vinfo):
     """Speak one line, falling back to the narrator voice and then to silence."""
     tries = [(vinfo["voice"], VOICE_STYLE.get(vinfo["type"])) if vinfo else (None, None), (None, None)]
+    if engine == "kokoro" and vinfo and vinfo.get("voice") and "@" not in vinfo["voice"]:
+        # a little acting for the free voices: excited lines a touch quicker, hesitant or trailing ones slower
+        t = text.strip()
+        pace = 1.07 if t.endswith("!") else 0.93 if t.endswith(("...", "…")) or t.count(",") >= 4 else \
+            1.03 if t.endswith("?") else 1.0
+        if pace != 1.0:
+            tries.insert(0, (f"{vinfo['voice']}@{pace}", VOICE_STYLE.get(vinfo["type"])))
     for voice, style in tries:
         try:
             narrate(cfg, text, wav, engine, voice, style)
@@ -3522,6 +3681,7 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
     audience, rules, _ = level_info(level)
     rules += style_rules(story.get("prefs"), level)
     rules += style_block(cfg.get("_STYLE"), level)
+    rules += WRITING_CRAFT
     adult = level == "explicit"
     extra = ("If the scene involves sex, write it out fully and explicitly, moment by moment, in graphic detail. "
              if adult else "")
@@ -3545,6 +3705,7 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
             as_json=False, system=EXPLICIT_SYSTEM if adult else None))
         if len(new.split()) < 40:
             raise ValueError(f"The writer sent back almost nothing for scene {i + 1}. Try again.")
+        new = proofread(cfg, new, EXPLICIT_SYSTEM if adult else None)
         if adult:
             new = adult_guard(cfg, new, EXPLICIT_SYSTEM)
         sc["narration"] = new
@@ -3975,6 +4136,7 @@ def main():
     ap.add_argument("--yes", action="store_true", help="skip the MAX_COST_USD check")
     ap.add_argument("--fresh", action="store_true", help="ignore any unfinished earlier attempt")
     ap.add_argument("--no-style", action="store_true", help="don't use your saved style for this story")
+    ap.add_argument("--no-proofread", action="store_true", help="skip the copy editor's pass (faster)")
     ap.add_argument("--recover", metavar="JOB", help="carry on an unfinished story from what it already wrote")
     ap.add_argument("--background", action="store_true", help="return at once; notify when finished")
     ap.add_argument("--status", metavar="JOB_ID", help="print the status of a background job")
@@ -4015,6 +4177,8 @@ def main():
         cfg["VIDEO_PROVIDER"] = args.video
 
     cfg["_STYLE"] = {} if args.no_style else style_from_env()
+    if args.no_proofread:
+        cfg["PROOFREAD"] = "off"
     if args.recover:                                  # finish a stopped story from its saved plan and scenes
         recover_settings(cfg, args)
 

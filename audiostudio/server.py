@@ -345,6 +345,7 @@ def project(pid: str, user=Depends(current_user)):
     st = E.read_status(d)
     st["queued_or_running"] = st.get("state") in ("queued", "running")
     return {"ok": True, "id": pid, "title": p["title"], "level": p["level"], "engine": p.get("engine"),
+            "voiceModel": p.get("voice_model") or cfg.get("CHATTERBOX_MODEL", "standard"), "acting": p.get("acting", 1.0),
             "narrator": p.get("narrator"), "cast": p["cast"], "castDone": p.get("cast_done", False),
             "soundsDone": p.get("sounds_done", False), "soundWishes": p.get("sound_wishes", ""),
             "narratorLines": p.get("narrator_lines", 0), "words": p.get("words", 0), "source": p.get("source"),
@@ -362,6 +363,13 @@ def settings(pid: str, body: dict = Body(...), user=Depends(current_user)):
     d, p, _ = project_for(user, pid)
     if body.get("engine") in ("chatterbox", "kokoro"):
         p["engine"] = body["engine"]
+    if body.get("voiceModel") in ("standard", "turbo"):
+        p["voice_model"] = body["voiceModel"]
+    if body.get("acting") is not None:
+        try:
+            p["acting"] = round(max(0.6, min(1.6, float(body["acting"]))), 2)
+        except (TypeError, ValueError):
+            pass
     if isinstance(body.get("title"), str) and body["title"].strip():
         p["title"] = body["title"].strip()[:120]
     E.save_project(d, p)
@@ -505,7 +513,7 @@ def voices(user=Depends(current_user)):
 
 @app.get("/api/voices/sample")
 def voice_sample(voice: str, engine: str = "kokoro", user=Depends(current_user)):
-    if not (re.fullmatch(r"kokoro:[ab][fm]_[a-z]+(\+[ab][fm]_[a-z]+)?(\^[\d.]+)?", voice) or
+    if not (re.fullmatch(r"kokoro:[abefhijpz][fm]_[a-z]+(\+[abefhijpz][fm]_[a-z]+)?(\^[\d.]+)?", voice) or
             re.fullmatch(r"clip:[\w.-]+", voice)):
         raise HTTPException(400, "Unknown voice.")
     f = E.voice_sample(cfg, voice, engine if engine in ("chatterbox", "kokoro") else "kokoro")

@@ -242,6 +242,7 @@ function buildArgs(b) {
   if (writer) args.push("--provider", writer);
   if (b.portrait) args.push("--portrait");
   if (b.useStyle === false) args.push("--no-style");
+  if (b.proofread === false) args.push("--no-proofread");
   if (b.book) args.push("--book");
   if (typeof b.keywords === "string" && b.keywords.trim()) args.push("--keywords", b.keywords.trim().slice(0, 600));
   if (typeof b.sounds === "string" && b.sounds.trim()) args.push("--sounds", b.sounds.trim().slice(0, 300));
@@ -257,7 +258,7 @@ function buildArgs(b) {
   }
   return args;
 }
-const VOICE_SPEC = /^[ab][fm]_[a-z]+(\+[ab][fm]_[a-z]+)?(\^(0\.[89]\d?|1\.[01]\d?))?$/;
+const VOICE_SPEC = /^[abefhijpz][fm]_[a-z]+(\+[abefhijpz][fm]_[a-z]+)?(\^(0\.[89]\d?|1\.[01]\d?))?$/;
 const idea = (b) => (typeof b.idea === "string" ? b.idea.slice(0, 2000) : "");
 
 // The series a person may continue: those from stories they can see.

@@ -29,6 +29,7 @@ function formData() {
     writer: $("writer").value,
     portrait: $("portrait").checked,
     useStyle: $("useStyle").checked,
+    proofread: $("proofread").checked,
     book: $("book").checked,
   };
 }
@@ -112,12 +113,11 @@ function voicePicker(box, { gender = "", current = "", auto = "Automatic" } = {}
       sel.append(og);
     }
     const { base, pitch: p } = parseSpec(current);
-    if (base && [...sel.options].some((o) => o.value === base) && !String(current).includes("+")) { sel.value = base; pitch.value = PITCHES.some(([x]) => x === p) ? p : ""; }
+    if (base && [...sel.options].some((o) => o.value === base)) { sel.value = base; pitch.value = PITCHES.some(([x]) => x === p) ? p : ""; }
     else if (current) { const o = new Option("Keep the current voice", "__keep__"); sel.insertBefore(o, sel.options[1]); sel.value = "__keep__"; box.spec = () => (sel.value === "__keep__" ? current.replace(/@[\d.]+$/, "") : sel.value ? sel.value + (pitch.value ? `^${pitch.value}` : "") : ""); }
   });
   listen.addEventListener("click", () => {
     const spec = box.spec() || (voiceData && voiceData.narrator) || "af_heart";
-    if (spec.includes("+")) { listen.textContent = "Blended voice"; return; }
     listen.textContent = "Loading…";
     audio.src = `/api/voices/sample?v=${encodeURIComponent(spec)}`;
     audio.play().then(() => { listen.textContent = "Listen"; }).catch(() => { listen.textContent = "Listen"; });

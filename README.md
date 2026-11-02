@@ -592,3 +592,17 @@ Press **Style** at the top of StoryMaker to teach it your taste.
 - **Feedback:** the Feedback button on any story saves what you liked or didn't (and, if you like, a passage to
   match) into the matching style. Every story after that uses it.
 - To make one story without your style, untick **Use my style** under More options.
+
+## 14. Cleaner writing, fresh names, more voices
+
+- **Proofreading:** after a story is written, a copy editor goes over every scene. It fixes spelling, grammar,
+  broken or jumbled sentences, and makes it clear who is speaking in every exchange. It keeps the events,
+  length, style and heat. It roughly doubles the writing time; untick **Proofread every scene** under More
+  options to skip it. (Setting: `PROOFREAD=on` in storymaker.env.)
+- **Fresh names:** every story gets its own random set of names to choose from, and the overused ones (Mira,
+  Jake, Elara, Lily…) and names from your recent stories are left out. Names you write in the idea are kept.
+- **More voices and accents:** French, Spanish, Italian, Brazilian, Indian, Japanese and Chinese accents, plus
+  lighter accents (an English voice blended with an accented one). Pick them under Voices on any story, or in
+  Audio Studio's cast.
+- **Faster local writing:** on the Mac, give Ollama these two settings once, then quit and reopen Ollama:
+  `launchctl setenv OLLAMA_FLASH_ATTENTION 1` and `launchctl setenv OLLAMA_KV_CACHE_TYPE q8_0`.

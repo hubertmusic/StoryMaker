@@ -196,3 +196,9 @@ dialog#voiceLib { width: min(720px, calc(100vw - 32px)); }
 .send-sm { margin-top: 22px; padding: 14px 16px; border-radius: 12px; background: var(--shelf); display: grid; gap: 6px; justify-items: start; }
 .send-sm .saved, .send-sm .error { margin: 0; }
 .version { text-align: center; color: var(--line); font-size: 13px; margin: 0 0 24px; }
+.acting { grid-column: 1 / -1; display: grid; gap: 6px; background: var(--shelf); border-radius: 14px; padding: 14px 16px; }
+.acting label { font-weight: 700; font-size: 15px; }
+.acting output { color: var(--lamp); margin-left: 6px; }
+.acting input[type=range] { width: 100%; accent-color: var(--lamp); }
+.acting select { width: auto; max-width: 100%; }
+.mini-legend { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; }

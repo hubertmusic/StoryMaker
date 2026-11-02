@@ -463,7 +463,20 @@ $("designSounds").onclick = async () => {
 };
 
 // ───────────────────────── 4 · record ─────────────────────────
+const ACTING_WORDS = (v) => (v < 0.8 ? "calm" : v < 0.95 ? "gentle" : v <= 1.05 ? "natural" : v <= 1.3 ? "expressive" : "dramatic");
+$("acting").addEventListener("input", () => { $("actingOut").textContent = ACTING_WORDS(Number($("acting").value)); });
+$("acting").addEventListener("change", async () => {
+  await api(`/api/projects/${book.id}/settings`, { json: { acting: Number($("acting").value) } });
+  book.acting = Number($("acting").value);
+});
+$("voiceModel").addEventListener("change", async () => {
+  await api(`/api/projects/${book.id}/settings`, { json: { voiceModel: $("voiceModel").value } });
+  book.voiceModel = $("voiceModel").value;
+});
 function renderRecord() {
+  $("acting").value = book.acting || 1; $("actingOut").textContent = ACTING_WORDS(Number($("acting").value));
+  $("voiceModel").value = book.voiceModel || "standard";
+  $("actingRow").hidden = !me.chatterbox;
   const cb = document.querySelector("input[name=engine][value=chatterbox]");
   cb.disabled = !me.chatterbox;
   $("cbMissing").hidden = me.chatterbox;

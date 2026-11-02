@@ -148,6 +148,14 @@
           <span><strong>Chatterbox</strong> natural and expressive, with emotion. About as long as the book itself to record.</span></label>
         <label class="engine"><input type="radio" name="engine" value="kokoro">
           <span><strong>Kokoro</strong> fast drafts. Clear and smooth, less acting. A few minutes per hour of book.</span></label>
+        <div class="acting" id="actingRow">
+          <label for="acting">Acting <output id="actingOut">natural</output></label>
+          <input type="range" id="acting" min="0.6" max="1.6" step="0.1" value="1">
+          <div class="mini-legend"><span>Calm, even reading</span><span>Big, dramatic performance</span></div>
+          <label for="voiceModel">Chatterbox version</label>
+          <select id="voiceModel"><option value="standard">Best acting (standard)</option><option value="turbo">About twice as fast, a little less acting (turbo)</option></select>
+          <p class="hint">Changing either one records the lines again with the new setting.</p>
+        </div>
         <p class="hint" id="cbMissing" hidden>Chatterbox isn't installed on this Mac yet. The studio's README has the one-line install.</p>
       </fieldset>
       <div class="tab-buttons">

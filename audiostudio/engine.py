@@ -39,7 +39,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "1.7 (Oct 30)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "1.8 (Nov 2)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -530,6 +530,15 @@ def cast_text(cast):
     return "\n".join(out)
 
 
+def book_cfg(cfg, p):
+    """Settings for recording one book: its writer rules, its Chatterbox version and how much acting it wants."""
+    c = writer_cfg(cfg, p["level"])
+    if p.get("voice_model") in ("standard", "turbo"):
+        c["CHATTERBOX_MODEL"] = p["voice_model"]
+    c["_ACTING"] = float(p.get("acting") or 1.0)
+    return c
+
+
 def writer_cfg(cfg, level):
     c = dict(cfg)
     if level == "explicit":
@@ -938,11 +947,12 @@ def reference_clip(cfg, voice):
 # ───────────────────────────── recording engines ─────────────────────────────
 
 EMOTION_STYLE = {   # Chatterbox: (exaggeration, cfg_weight, temperature); Kokoro: speed
-    "neutral": (0.5, 0.5, 0.8, 1.0), "warm": (0.55, 0.5, 0.8, 0.97), "happy": (0.7, 0.45, 0.8, 1.04),
-    "excited": (0.85, 0.35, 0.85, 1.08), "playful": (0.75, 0.4, 0.85, 1.04), "tender": (0.6, 0.45, 0.75, 0.94),
-    "sad": (0.6, 0.5, 0.75, 0.9), "fearful": (0.75, 0.4, 0.85, 1.05), "tense": (0.7, 0.4, 0.8, 1.02),
-    "angry": (0.9, 0.35, 0.85, 1.06), "whisper": (0.4, 0.55, 0.7, 0.9), "seductive": (0.7, 0.3, 0.8, 0.9),
-    "breathless": (0.8, 0.35, 0.85, 1.0),
+    # more feeling than Chatterbox's defaults: higher exaggeration, and a lower cfg_weight for a natural pace
+    "neutral": (0.55, 0.45, 0.8, 1.0), "warm": (0.62, 0.42, 0.8, 0.97), "happy": (0.78, 0.38, 0.82, 1.04),
+    "excited": (0.95, 0.3, 0.85, 1.08), "playful": (0.85, 0.33, 0.85, 1.04), "tender": (0.68, 0.38, 0.75, 0.94),
+    "sad": (0.7, 0.42, 0.75, 0.9), "fearful": (0.88, 0.32, 0.85, 1.05), "tense": (0.8, 0.33, 0.8, 1.02),
+    "angry": (1.05, 0.28, 0.85, 1.06), "whisper": (0.45, 0.5, 0.7, 0.9), "seductive": (0.82, 0.28, 0.8, 0.9),
+    "breathless": (0.95, 0.28, 0.85, 1.0),
 }
 
 
@@ -979,7 +989,7 @@ class Chatterbox:
     def start(self, device=None):
         import subprocess
         free_ollama(self.cfg)                       # the writer's model and Chatterbox don't both fit in 16 GB
-        model = self.cfg.get("CHATTERBOX_MODEL", "standard")
+        model = self.model_name = getattr(self, "want_model", None) or self.cfg.get("CHATTERBOX_MODEL", "standard")
         self.device = device or self.cfg.get("CHATTERBOX_DEVICE", "auto")
         self.lines = 0
         log(f"Starting Chatterbox ({model}{', on the processor' if self.device == 'cpu' else ''})…")
@@ -1016,8 +1026,14 @@ class Chatterbox:
         with self._gen:
             self.stop()
 
-    def say(self, text, ref, emotion, out_wav, max_chars=260):
+    def say(self, text, ref, emotion, out_wav, max_chars=260, model=None, acting=1.0):
         ex, cw, temp, _ = EMOTION_STYLE.get(emotion, EMOTION_STYLE["neutral"])
+        acting = max(0.5, min(1.8, float(acting or 1.0)))     # the book's "acting" setting: calmer ↔ more dramatic
+        ex, cw = min(2.0, ex * acting), max(0.15, cw / acting ** 0.5)
+        if model and model != getattr(self, "model_name", None):
+            with self._gen:                                    # this book wants the other Chatterbox version
+                self.stop()
+            self.want_model = model
         job = {"chunks": chunk_text(text, max_chars), "ref": str(ref), "ex": ex, "cw": cw, "temp": temp,
                "out": str(out_wav)}
         with self._gen:
@@ -1101,6 +1117,9 @@ ENGINE_VERSION = "1"
 
 def part_key(engine, voice, emotion, text, cfg):
     extra = cfg.get("CHATTERBOX_MODEL", "standard") if engine == "chatterbox" else cfg.get("KOKORO_SPEED")
+    acting = float(cfg.get("_ACTING") or 1.0)
+    if engine == "chatterbox" and abs(acting - 1.0) > 0.01:
+        extra = f"{extra}|a{acting:.2f}"
     return hashlib.sha1(f"{ENGINE_VERSION}|{engine}|{extra}|{voice}|{emotion}|{text}".encode()).hexdigest()[:16]
 
 
@@ -1113,7 +1132,8 @@ def render_part(cfg, engine, voice, emotion, text, parts_dir, work):
     raw = work / f"raw_{key}.wav"
     lv = work / f"lv_{key}.wav"
     if engine == "chatterbox":
-        Chatterbox.get(cfg).say(text, reference_clip(cfg, voice), emotion, raw, int(cfg["STUDIO_MAX_LINE_CHARS"]))
+        Chatterbox.get(cfg).say(sm.tts_clean(text), reference_clip(cfg, voice), emotion, raw, int(cfg["STUDIO_MAX_LINE_CHARS"]),
+                                model=cfg.get("CHATTERBOX_MODEL", "standard"), acting=cfg.get("_ACTING") or 1.0)
     else:
         kind, _, name = voice.partition(":")
         if kind != "kokoro":                 # your own clips need Chatterbox; Kokoro uses a voice of the same gender
@@ -1289,7 +1309,7 @@ def run_record(cfg, pid, progress=lambda f, d, **x: None, chapters=None):
     if not p.get("cast_done"):
         run_casting(cfg, pid)
         d, p, s = load_project(cfg, pid)
-    rcfg = writer_cfg(cfg, p["level"])
+    rcfg = book_cfg(cfg, p)
     rcfg["TTS_PROVIDER"] = "kokoro"
     if engine == "chatterbox":
         free_ollama(rcfg)                     # casting is done: give the memory to the voices
@@ -1456,7 +1476,7 @@ def preview_line(cfg, pid, sec_id, seg_id, engine=None):
     engine = engine or p.get("engine") or cfg["STUDIO_ENGINE"]
     if engine == "chatterbox" and not Chatterbox.available():
         engine = "kokoro"
-    rcfg = writer_cfg(cfg, p["level"])
+    rcfg = book_cfg(cfg, p)
     (d / "parts").mkdir(exist_ok=True)
     (d / "work").mkdir(exist_ok=True)
     f = render_part(rcfg, engine, voice_for(p, seg["speaker"] or "Narrator"), seg.get("emotion") or "neutral",
