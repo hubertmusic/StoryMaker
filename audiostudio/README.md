@@ -102,6 +102,13 @@ To have it start by itself whenever the Mac starts, run `./autostart.sh`. To sto
 
 The first Chatterbox recording downloads its voice model, which is a few GB, one time only.
 
+## Hiding grown-up books
+
+**Settings** (top right) has the same **Show Mature and Explicit** switch as StoryMaker. It's one switch for both
+apps. When it's off, Mature and Explicit books, StoryMaker stories and levels are hidden in both. Turning it off
+takes effect straight away and needs nothing. Turning it back on asks for your password (five wrong tries locks it for
+10 minutes). Only the owner's account has the switch; other people never see grown-up books.
+
 ## Use it from anywhere (Tailscale)
 
 ```bash

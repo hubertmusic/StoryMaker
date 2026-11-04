@@ -60,6 +60,29 @@ const edits = new Map();          // script changes not saved yet
   route();
 })();
 window.addEventListener("hashchange", route);
+// settings: the grown-up switch (the same one as StoryMaker's)
+function openSettings() {
+  const owner = me.role === "owner";
+  $("grownupBlock").hidden = !owner; $("grownupMember").hidden = owner;
+  $("grownupOn").checked = !!me.adultSwitch;
+  $("grownupPwRow").hidden = $("grownupSave").hidden = true; $("grownupMsg").hidden = true; $("grownupPw").value = "";
+  $("settingsDlg").showModal();
+}
+async function setGrownup(on) {
+  const r = await api("/api/grownup", { json: { on, current: $("grownupPw").value } });
+  if (!r.ok) { $("grownupMsg").textContent = r.error || "That didn't work."; $("grownupMsg").hidden = false; $("grownupOn").checked = !on; return; }
+  location.hash = ""; location.reload();             // the library and levels follow straight away
+}
+$("settingsBtn").onclick = openSettings;
+$("grownupOn").addEventListener("change", () => {
+  $("grownupMsg").hidden = true;
+  if (!$("grownupOn").checked) { setGrownup(false); return; }          // hiding: right away, no password
+  $("grownupPwRow").hidden = $("grownupSave").hidden = false;          // showing: password first
+  $("grownupPw").focus();
+});
+$("grownupSave").onclick = () => setGrownup(true);
+$("grownupPw").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); setGrownup(true); } });
+$("settingsDlg").addEventListener("close", () => { if (!$("grownupSave").hidden) $("grownupOn").checked = !!me.adultSwitch; });
 $("signOut").onclick = async () => { await api("/api/logout", { method: "POST" }); location.href = "/login.html"; };
 
 function route() {

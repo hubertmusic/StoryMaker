@@ -217,3 +217,9 @@ dialog#voiceLib { width: min(720px, calc(100vw - 32px)); }
 .bh-meta, .bh-note { color: var(--muted); font-size: 14px; }
 @media (max-width: 560px) { .choice.four { grid-template-columns: 1fr 1fr; } }
 .choice.four label { padding: 9px 4px; white-space: nowrap; font-size: 15px; }
+
+/* settings */
+#settingsDlg { max-width: 460px; }
+.grownup h4 { margin: 10px 0 10px; font-size: 17px; }
+.grownup .switch { margin-bottom: 8px; }
+.grownup .go { margin-top: 10px; }

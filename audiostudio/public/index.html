@@ -13,6 +13,7 @@
   <nav>
     <a id="smLink" href="#">StoryMaker</a>
     <span class="who" id="whoAmI"></span>
+    <button type="button" class="quiet signout" id="settingsBtn">Settings</button>
     <button type="button" class="quiet signout" id="signOut">Sign out</button>
   </nav>
 </header>
@@ -214,6 +215,27 @@
   </form>
   <div id="libList"></div>
   <form method="dialog" class="dlg-float"><button class="float-close">Close</button></form>
+</dialog>
+
+<dialog id="settingsDlg" aria-labelledby="setH">
+  <form method="dialog" class="dlg-x"><button class="x-btn" aria-label="Close" title="Close">&times;</button></form>
+  <h3 id="setH" class="panel-h">Settings</h3>
+  <section class="grownup" id="grownupBlock">
+    <h4>Grown-up books</h4>
+    <label class="switch">
+      <input type="checkbox" id="grownupOn" role="switch">
+      <span class="track" aria-hidden="true"><span class="knob"></span></span>
+      <span>Show Mature and Explicit</span>
+    </label>
+    <p class="hint">When this is off, Mature and Explicit books, stories and levels are hidden here and in StoryMaker. It's the same switch in both apps. Hiding them needs nothing; showing them again needs your password.</p>
+    <div class="field" id="grownupPwRow" hidden>
+      <label for="grownupPw">Your password</label>
+      <input id="grownupPw" type="password" autocomplete="current-password">
+    </div>
+    <p class="error" id="grownupMsg" role="status" hidden></p>
+    <button type="button" class="go" id="grownupSave" hidden>Show them</button>
+  </section>
+  <p class="hint" id="grownupMember" hidden>Only the owner can show or hide grown-up books.</p>
 </dialog>
 
 <audio id="player" hidden></audio>

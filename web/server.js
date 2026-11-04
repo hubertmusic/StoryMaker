@@ -572,6 +572,26 @@ app.post("/api/me", (req, res) => {
   res.json({ ok: true });
 });
 
+// The grown-up switch on its own (used by Audio Studio too): hiding Mature and Explicit never needs a password;
+// showing them again needs the owner's password.
+const switchTries = new Map();
+app.post("/api/me/adult", (req, res) => {
+  const u = req.user, b = req.body || {};
+  if (u.role !== "owner") return res.status(403).json({ ok: false, error: "Only the owner can change this." });
+  const on = b.on === true;
+  if (on) {
+    const t = switchTries.get(u.id) || { n: 0, at: 0 };
+    if (t.n >= 5 && Date.now() - t.at < 10 * 60 * 1000) return res.json({ ok: false, error: "Too many wrong passwords. Try again in 10 minutes." });
+    if (!passwordOk(u, b.current)) {
+      switchTries.set(u.id, { n: t.n + 1, at: Date.now() });
+      return res.json({ ok: false, error: "That password isn't right." });
+    }
+    switchTries.delete(u.id);
+  }
+  db.prepare("UPDATE users SET adult_switch = ? WHERE id = ?").run(on ? 1 : 0, u.id);
+  res.json({ ok: true, adultSwitch: on });
+});
+
 // People (owner only): add, change, remove.
 function ownerOnly(req, res, next) {
   if (req.user.role !== "owner") return res.status(403).json({ ok: false, error: "Only the owner can do that." });

@@ -92,7 +92,8 @@ def current_user(request: Request):
         _me_cache.pop(token, None)
         raise HTTPException(401, "Please sign in.")
     me = r.json()
-    user = {"id": str(me.get("id")), "username": me.get("username"), "role": me.get("role"), "levels": me.get("levels") or [], "token": token}
+    user = {"id": str(me.get("id")), "username": me.get("username"), "role": me.get("role"), "levels": me.get("levels") or [],
+            "adultSwitch": bool(me.get("adultSwitch")), "token": token}
     _me_cache[token] = (time.time(), user)
     return user
 
@@ -233,7 +234,23 @@ def me(user=Depends(current_user)):
             "version": E.STUDIO_VERSION,
             "chatterbox": E.Chatterbox.available(), "engine": cfg["STUDIO_ENGINE"],
             "chatterboxModel": cfg.get("CHATTERBOX_MODEL", "standard"), "emotions": E.EMOTIONS,
-            "storymaker": cfg.get("STORYMAKER_PUBLIC_URL", "")}
+            "storymaker": cfg.get("STORYMAKER_PUBLIC_URL", ""), "adultSwitch": user.get("adultSwitch", False)}
+
+
+@app.post("/api/grownup")
+def grownup(body: dict = Body(...), user=Depends(current_user)):
+    """StoryMaker's grown-up switch, from the studio: the same one, so both apps hide or show together.
+    Hiding needs nothing; showing needs the owner's password."""
+    if user["role"] != "owner":
+        raise HTTPException(403, "Only the owner can change this.")
+    try:
+        r = requests.post(SM + "/api/me/adult", cookies={"sm_session": user["token"]}, timeout=15,
+                          json={"on": body.get("on") is True, "current": str(body.get("current", ""))[:200]})
+        data = r.json()
+    except (requests.RequestException, ValueError):
+        raise HTTPException(503, f"StoryMaker isn't answering at {SM}. Is it running?")
+    _me_cache.pop(user["token"], None)                  # the new setting counts straight away
+    return data
 
 
 @app.get("/api/projects")
