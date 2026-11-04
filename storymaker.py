@@ -1802,8 +1802,20 @@ def run(cmd, **kw):
 
 
 def duration(path):
-    return float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                      "-of", "default=nw=1:nk=1", str(path)]).stdout.strip())
+    """How long a sound or video is, in seconds. Never fails on a file that doesn't say (ffprobe answers "N/A" for
+    an empty recording, a picture or a stream): it's then measured by reading it through, and 0 if there's nothing."""
+    out = run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+               "-of", "default=nw=1:nk=1", str(path)]).stdout.strip()
+    try:
+        return max(0.0, float(out))
+    except ValueError:
+        pass
+    res = subprocess.run(["ffmpeg", "-v", "info", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True)
+    times = re.findall(r"time=(\d+):(\d+):([\d.]+)", res.stderr)
+    if not times:
+        return 0.0
+    h_, m_, s_ = times[-1]
+    return int(h_) * 3600 + int(m_) * 60 + float(s_)
 
 
 def has_audio(path):
@@ -1813,7 +1825,7 @@ def has_audio(path):
 
 def valid_media(path):
     try:
-        return Path(path).exists() and Path(path).stat().st_size > 0 and duration(path) > 0
+        return Path(path).exists() and Path(path).stat().st_size > 0 and duration(path) > 0.02
     except Exception:
         return False
 
@@ -2750,7 +2762,7 @@ def level_stats(path):
                           "-f", "null", "-"], capture_output=True, text=True)
     rms = re.findall(r"RMS level dB:\s*(-?[\d.]+|-inf)", res.stderr)
     peak = re.findall(r"Peak level dB:\s*(-?[\d.]+|-inf)", res.stderr)
-    f = lambda v: -90.0 if not v or v[-1] == "-inf" else float(v[-1])
+    f = lambda v: -90.0 if not v or v[-1] in ("-inf", "nan", "N/A") else float(v[-1])
     return f(rms), f(peak)
 
 
@@ -2808,8 +2820,14 @@ def record_voices(cfg, story, job, parts_dir, saved_voices=None, fresh_voices=Fa
                 _s, _p, gain, extra = EMOTION_KOKORO[acted]
                 shape = ([extra] if extra else []) + ([f"volume={gain}dB"] if gain else []) + \
                     (["alimiter=limit=0.89:level=false"] if gain > 0 else [])
-            run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), *(["-af", ",".join(shape)] if shape else []),
-                 "-c:a", "flac", str(lv)])
+            try:
+                run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), *(["-af", ",".join(shape)] if shape else []),
+                     "-c:a", "flac", str(lv)])
+            except RuntimeError:
+                lv.unlink(missing_ok=True)
+            if not valid_media(lv):                    # nothing came out (a line of only "…", a voice hiccup)
+                log(f"No sound came out for the line \"{text[:60]}\"; a short pause is used instead.")
+                silence(lv, 0.3)
             raw.unlink(missing_ok=True)
             wav.unlink(missing_ok=True)
         return lv
@@ -3133,7 +3151,7 @@ def find_sound(cfg, query, kind, level):
                 continue
             fw = set(_words(f.stem.replace("-", " ").replace("_", " ")))
             score = len(fw & set(words))
-            if score > best_score:
+            if score > best_score and valid_media(f):          # a broken or empty file is skipped
                 best, best_score = f, score
     if best and best_score >= max(1, min(2, len(words))):
         return best, "your own recording"
@@ -3404,8 +3422,11 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
         if key not in cache:
             out = job / f"snd_{hashlib.sha1(str(key).encode()).hexdigest()[:10]}.wav"
             if not valid_media(out):
-                level_match(path, out, target_rms=target, ceiling=-3, stereo=True)
-            cache[key] = out
+                try:
+                    level_match(path, out, target_rms=target, ceiling=-3, stereo=True)
+                except RuntimeError as e:
+                    log(f"A sound couldn't be used ({str(e)[:80]}).")
+            cache[key] = out if valid_media(out) else None
         return cache[key]
 
     segs = timeline["segments"]
@@ -3451,11 +3472,13 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
             b = min(dur, sentence_time(sp["k1"]) - seg["start"] + (0 if sp["cout"] else 1.5))
             if b - a < 6 and not (sp["cin"] or sp["cout"]):
                 continue                                         # too short to be worth a background
+            src = leveled(amb, -30)
+            if not src:
+                continue
             credits.append(credit)
             amb_names.append(f"{sp['query']} {a:.0f}–{b:.0f}s")
             fi = 0.05 if sp["cin"] else min(2.0, (b - a) / 4)
             fo = 0.05 if sp["cout"] else min(2.5, (b - a) / 4)
-            src = leveled(amb, -30)
             off = amb_pos.get(sp["name"], 0.0) % max(1.0, duration(src) - 1) if sp["cin"] else 0.0
             amb_pos[sp["name"]] = off + (b - a)
             inputs += ["-stream_loop", "-1", "-ss", f"{off:.2f}", "-i", str(src)]
@@ -3470,14 +3493,13 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
             layers, auto_fx = intimate_sounds(seg, sc.get("narration", ""))
         for t0, t1, query in layers:               # soft breathing under the love scene, and only there
             f_, credit = find_sound(cfg, query, "effect", level)
-            if not f_:
+            f_ = leveled(f_, -30) if f_ else None
+            a, b = max(0.0, t0 - seg["start"]), min(dur, t1 - seg["start"])
+            if not f_ or b - a < 4:
                 continue
             credits.append(credit)
-            a, b = max(0.0, t0 - seg["start"]), min(dur, t1 - seg["start"])
-            if b - a < 4:
-                continue
             fd = min(3.0, (b - a) / 4)
-            inputs += ["-stream_loop", "-1", "-i", str(leveled(f_, -30))]
+            inputs += ["-stream_loop", "-1", "-i", str(f_)]
             chains.append(f"[{k}:a]atrim=0:{b - a:.2f},asetpts=N/SR/TB,volume={0.45 * float(cfg['EFFECTS_VOLUME']):.3f},"
                           f"afade=t=in:d={fd:.2f},afade=t=out:st={b - a - fd:.2f}:d={fd:.2f},"
                           f"adelay={int(a * 1000)}|{int(a * 1000)}[a{k}]")
@@ -3501,6 +3523,7 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
             if at > seg["end"] - 0.5:
                 continue
             f_, credit = find_sound(cfg, fx.get("sound"), "effect", level)
+            f_ = leveled(f_, -26) if f_ else None
             if not f_:
                 continue
             last_at = at
@@ -3514,7 +3537,7 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
             line_end = fx.get("_end") or (at + 3)
             cap = 6.0 if CONTINUOUS_FX.search(fx.get("sound", "")) else 2.5
             room = max(1.0, min(cap, max(line_end + 0.4 - at, 1.0), seg["end"] - at))
-            inputs += ["-i", str(leveled(f_, -26))]
+            inputs += ["-i", str(f_)]
             chains.append(f"[{k}:a]atrim=0:{room:.2f},afade=t=out:st={max(0.0, room - 0.6):.2f}:d=0.6,"
                           f"volume={fx_gain:.3f},adelay={delay}|{delay}[a{k}]")
             labels.append(f"[a{k}]")
@@ -3533,15 +3556,19 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
     lst.write_text("".join(f"file '{p_}'\n" for p_ in pieces))
     bed = job / "bed.wav"
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-ar", "44100", "-ac", "2", str(bed)])
+    music_src = leveled(music, -26 if cfg.get("MUSIC_MODE", "under") == "moments" else -32) if music else None
+    if music and not music_src:
+        log(f"The music track {music.name} couldn't be played, so this story has none.")
+        music = None
     if music and cfg.get("MUSIC_MODE", "under") == "moments":
         mixed = job / "bed_music.wav"
-        mix_music_moments(cfg, bed, music, timeline, mixed, leveled(music, -26))
+        mix_music_moments(cfg, bed, music, timeline, mixed, music_src)
         bed = mixed
         credits.append(MUSIC_CREDITS.get(str(music), f"Music: {music.name}"))
     elif music:
         total = timeline["total"]
         mixed = job / "bed_music.wav"
-        run(["ffmpeg", "-y", "-v", "error", "-i", str(bed), "-stream_loop", "-1", "-i", str(leveled(music, -32)),
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(bed), "-stream_loop", "-1", "-i", str(music_src),
              "-filter_complex", f"[1:a]atrim=0:{total:.3f},asetpts=N/SR/TB,volume={float(cfg['MUSIC_VOLUME']) / 0.18:.3f},"
                                 f"afade=t=in:d=3,afade=t=out:st={max(0, total - 4):.2f}:d=4[m];"
                                 f"[0:a][m]amix=inputs=2:duration=first:normalize=0[o]",
@@ -3722,6 +3749,8 @@ def slice_segments(final, timeline, job):
         f_ = job / f"slice_{n_:03d}.wav"
         run(["ffmpeg", "-y", "-v", "error", "-ss", f"{seg['start']:.3f}", "-t", f"{seg['end'] - seg['start']:.3f}",
              "-i", str(final), "-ar", "44100", "-ac", "2", str(f_)])
+        if not valid_media(f_):                     # past the end of the audio: silence of the right length
+            silence(f_, max(0.5, seg["end"] - seg["start"]), channels=2)
         out.append(f_)
     return out
 
@@ -3798,7 +3827,7 @@ def still_segment(cfg, pic, cap, wav, seg, w, h, zoom_in=True, fps=30):
     """One part of the video from one or more pictures: a slow push in or out across the whole part (never a
     sudden stop), and a soft cross-fade from one picture to the next."""
     pics = [p_ for p_ in (pic if isinstance(pic, (list, tuple)) else [pic]) if p_]
-    secs = duration(wav) + 0.6
+    secs = max(0.5, duration(wav)) + 0.6
     n = len(pics)
     part = secs / n
     fade = min(1.0, part / 4) if n > 1 else 0
@@ -4900,10 +4929,41 @@ def story_markdown(story, subtitle=""):
     return "\n".join(parts) + "\n"
 
 
+class AlreadyRunning(Exception):
+    pass
+
+
+def claim_job(job):
+    """Only one copy of a story is ever made at a time (two at once would trip over each other's files): a second
+    start of the same story while the first is still going is turned away."""
+    lock = job / "running.pid"
+    try:
+        pid = int(lock.read_text().split()[0])
+        if pid != os.getpid():
+            os.kill(pid, 0)                                    # still alive?
+            cmd = Path(f"/proc/{pid}/cmdline")
+            if not cmd.exists() or b"storymaker" in cmd.read_bytes():
+                return False
+    except (OSError, ValueError, IndexError):
+        pass
+    lock.write_text(str(os.getpid()))
+    return True
+
+
 def run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series):
     clip_mode = args.mode == "video" and vprovider in ("omni", "veo", "demo")
     w, h = (1080, 1920) if args.portrait else (1920, 1080)
     job.mkdir(parents=True, exist_ok=True)
+    if not claim_job(job):
+        raise AlreadyRunning("This story is already being made. Its progress is on the page: there's no need to "
+                             "start it again.")
+    try:
+        return _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, clip_mode, w, h)
+    finally:
+        (job / "running.pid").unlink(missing_ok=True)
+
+
+def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, clip_mode, w, h):
     write_status(cfg, job_id, state="running", step="writing")
 
     # A continuing series reuses its character sheet so the characters look the same as last time.
@@ -5409,6 +5469,10 @@ def main():
     notify_on = cfg["NOTIFY"] == "always" or (cfg["NOTIFY"] == "background" and args.child)
     try:
         result = run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series)
+    except AlreadyRunning as e:                           # the copy that's running keeps its progress as it is
+        log(str(e))
+        print(json.dumps({"ok": False, "error": str(e)}))
+        raise SystemExit(0)
     except MinorContent as e:
         shutil.rmtree(job, ignore_errors=True)            # nothing of it is kept: not the plan, not a scene
         for f in jobs_dir(cfg).glob(f"{job_id}*"):

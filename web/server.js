@@ -433,7 +433,7 @@ setTimeout(async () => {
     const r = await recoverJob(u, j);
     console.log(`Carrying on story ${id} after the restart: ${r.ok ? "started" : r.error}`);
   }
-}, 20000);
+}, Number(process.env.RECOVER_DELAY_SECONDS || 300) * 1000);   // not straight away: the Mac may still be starting up
 
 app.delete("/api/jobs/:id", (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");

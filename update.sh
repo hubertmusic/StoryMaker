@@ -90,9 +90,12 @@ echo
 echo "▸ Audio Studio…"
 cd "$APP/audiostudio"
 bash "$APP/audiostudio/install.sh"
+# a studio started by hand in a Terminal window keeps running the old version: stop it so the new one takes over
+OLD=$(lsof -t -iTCP:8096 -sTCP:LISTEN 2>/dev/null || true)
+if [ -n "$OLD" ]; then echo "  Stopping the studio that's running now (it's the old version)…"; kill $OLD 2>/dev/null || true; sleep 3; fi
 bash "$APP/audiostudio/autostart.sh"
-sleep 8
-tail -1 "$APP/studio/studio.log" 2>/dev/null || true
+sleep 10
+grep -o "Audio Studio [0-9.]* ([^)]*)" "$APP/studio/studio.log" 2>/dev/null | tail -1 || true
 
 echo
 echo "All done."

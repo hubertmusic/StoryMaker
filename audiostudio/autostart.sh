@@ -17,6 +17,8 @@ cat > "$PLIST" <<PL
   <key>WorkingDirectory</key><string>$PWD</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>EnvironmentVariables</key><dict><key>STUDIO_AT_LOGIN</key><string>1</string></dict>
   <key>StandardOutPath</key><string>$HOME/StoryMaker/studio/studio.log</string>
   <key>StandardErrorPath</key><string>$HOME/StoryMaker/studio/studio.log</string>
 </dict></plist>
@@ -25,5 +27,5 @@ if ! launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
   sleep 3
   launchctl bootstrap "gui/$(id -u)" "$PLIST" || { echo "Couldn't start it. Run ./autostart.sh again in a moment."; exit 1; }
 fi
-echo "Audio Studio is running and will start by itself from now on."
+echo "Audio Studio will start by itself from now on (a few minutes after the Mac starts, so logging in stays quick)."
 echo "Its log: ~/StoryMaker/studio/studio.log"
