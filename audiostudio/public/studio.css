@@ -11,6 +11,7 @@ body.on-air .brand a::after { background: #ff5a4f; box-shadow: 0 0 0 4px rgba(25
 /* home */
 .home-grid { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 14px; }
 .choice.three { grid-template-columns: repeat(3, 1fr); }
+.choice.four { grid-template-columns: repeat(4, 1fr); }
 .books { display: grid; gap: 10px; }
 .book-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 14px; align-items: center; text-align: left;
   background: var(--shelf); color: var(--paper); border-radius: 12px; padding: 10px 14px 10px 10px; }
@@ -202,3 +203,17 @@ dialog#voiceLib { width: min(720px, calc(100vw - 32px)); }
 .acting input[type=range] { width: 100%; accent-color: var(--lamp); }
 .acting select { width: auto; max-width: 100%; }
 .mini-legend { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; }
+
+/* free books */
+.search-row { display: flex; gap: 8px; }
+.search-row input { flex: 1; min-width: 0; }
+.book-results { display: grid; gap: 6px; margin-top: 10px; max-height: 340px; overflow: auto; }
+.book-hit { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border-radius: 10px; background: var(--dusk); cursor: pointer; }
+.book-hit:has(input:checked) { outline: 2px solid var(--lamp); }
+.book-hit input { margin-top: 4px; }
+.book-hit.off { opacity: .65; cursor: default; }
+.bh-main { display: grid; gap: 2px; min-width: 0; }
+.bh-title { font-weight: 700; }
+.bh-meta, .bh-note { color: var(--muted); font-size: 14px; }
+@media (max-width: 560px) { .choice.four { grid-template-columns: 1fr 1fr; } }
+.choice.four label { padding: 9px 4px; white-space: nowrap; font-size: 15px; }

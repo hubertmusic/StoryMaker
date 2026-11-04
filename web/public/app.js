@@ -111,11 +111,16 @@ function voicePicker(box, { gender = "", current = "", auto = "Automatic" } = {}
   box.spec = () => (sel.value ? sel.value + (pitch.value ? `^${pitch.value}` : "") : "");
   voices().then((v) => {
     if (!v.ok || !v.kokoro) { listen.hidden = true; pitch.hidden = true; sel.disabled = true; sel.options[0].text = "Automatic (voice picking needs the free Kokoro voices)"; return; }
-    const groups = { female: "Women's voices", male: "Men's voices" };
+    const who = { female: "Women", male: "Men" };
+    const kinds = [["standard", "voices"], ["character", "character voices"], ["accent", "with an accent"]];
     for (const g of gender ? [gender, gender === "female" ? "male" : "female"] : ["female", "male"]) {
-      const og = document.createElement("optgroup"); og.label = groups[g];
-      for (const x of v.voices.filter((y) => y.gender === g)) og.append(new Option(`${x.name} (${x.accent}, ${x.note})`, x.id));
-      sel.append(og);
+      for (const [k, label] of kinds) {
+        const list = v.voices.filter((y) => y.gender === g && (y.group || "standard") === k);
+        if (!list.length) continue;
+        const og = document.createElement("optgroup"); og.label = `${who[g]}: ${label}`;
+        for (const x of list) og.append(new Option(`${x.name} (${x.accent}, ${x.note})`, x.id));
+        sel.append(og);
+      }
     }
     const { base, pitch: p } = parseSpec(current);
     if (base && [...sel.options].some((o) => o.value === base)) { sel.value = base; pitch.value = PITCHES.some(([x]) => x === p) ? p : ""; }
@@ -514,7 +519,7 @@ function followJob(jobId, meter, done, fail) {
   const t = setInterval(async () => {
     const st = await api(`/api/status/${jobId}`);
     if (st.state === "running" || st.state === "queued") meter.set(st.progress || 0, st.state === "queued" ? "Getting started…" : st.detail);
-    else if (st.state === "done") { clearInterval(t); meter.set(100, "Done"); done(); }
+    else if (st.state === "done") { clearInterval(t); meter.set(100, "Done"); done(st); }
     else if (st.state === "failed" || st.ok === false) { clearInterval(t); fail(st.error || "It stopped."); }
   }, 2000);
 }
@@ -531,7 +536,7 @@ function storyTools(s, id, el) {
     o.append(tx, btn("Remake the audio to match", () => remakePanel(true)));
     wrap.appendChild(o);
   }
-  bar.append(btn("Edit the text", editPanel), btn("Rewrite with AI", rewritePanel));
+  bar.append(btn("Edit the text", editPanel), btn("Clean up the writing", cleanupPanel), btn("Rewrite with AI", rewritePanel));
   bar.append(btn("Cast", castPanel), btn("Feedback", feedbackPanel));
   if (hasAudio) bar.append(btn("Voices", voicesPanel), btn("Sounds", soundsPanel), btn("Remake the audio", () => remakePanel(false)));
   bar.append(btn("Send to Audio Studio", () => {
@@ -582,6 +587,33 @@ function storyTools(s, id, el) {
       save.disabled = false;
       if (!r.ok) { msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
       refreshCard(id, el);
+    });
+  }
+
+  async function cleanupPanel() {
+    area.innerHTML = "";
+    const p = document.createElement("div"); p.className = "panel-tool";
+    p.innerHTML = '<h4>Clean up the writing</h4><p class="level-note">Checking the sentences…</p>';
+    area.appendChild(p);
+    const c = await api(`/api/stories/${encodeURIComponent(id)}/writing-check`);
+    if (!c.ok) { p.querySelector(".level-note").textContent = c.error || "Couldn't check it."; return; }
+    p.innerHTML = '<h4>Clean up the writing</h4>';
+    p.appendChild(writingReport(c));
+    const note = document.createElement("p"); note.className = "level-note";
+    note.textContent = "The proofreader and the sentence checker go over every scene: spelling, grammar, run-on and tangled sentences, quotes, and who is speaking. The events, names, style and heat stay as they are, and so do your sounds.";
+    const rl = document.createElement("label"); rl.className = "check";
+    const rc = document.createElement("input"); rc.type = "checkbox"; rc.checked = true;
+    rl.append(rc, document.createTextNode(" Remake the audio afterwards (only the changed lines are recorded again)"));
+    const go = document.createElement("button"); go.className = "go"; go.type = "button"; go.textContent = "Clean it up";
+    const msg = document.createElement("p"); msg.className = "settings-msg";
+    p.append(note, ...(c.has_audio ? [rl] : []), go, msg);
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      const r = await api(`/api/stories/${encodeURIComponent(id)}/cleanup`, { remake: rc.checked });
+      if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
+      const m = jobMeter(); p.appendChild(m);
+      followJob(r.job_id, m, (st) => { msg.className = "settings-msg"; msg.textContent = cleanupSummary(st); setTimeout(() => refreshCard(id, el), 2500); },
+        (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });
     });
   }
 
@@ -732,7 +764,7 @@ function storyTools(s, id, el) {
     const full = await api(`/api/stories/${encodeURIComponent(id)}/full`);
     if (!full.ok) { area.textContent = full.error; return; }
     const p = document.createElement("div"); p.className = "panel-tool";
-    p.innerHTML = '<h4>Sounds</h4><p class="level-note">Change what plays under each scene. Background: where the scene happens ("rain on a window"). Effects: short sounds, and the words they play on (leave the words blank to play near the start).</p>';
+    p.innerHTML = '<h4>Sounds</h4><p class="level-note">Background: leave it blank and it follows the story by itself, starting where the text puts you somewhere (the rain, a café, the sea) and lasting only as long as you stay there. Type a sound to play it under the whole scene, or <strong>none</strong> for silence. Effects play once, on the words you give, and only as long as that line; tick <strong>every time</strong> to play it each time those words are read.</p>';
     const wl = document.createElement("label"); wl.textContent = "Sounds you want to hear in this story";
     const wi = document.createElement("input"); wi.type = "text"; wi.maxLength = 300; wi.value = full.soundWishes || "";
     wi.placeholder = "rain, thunder, seagulls, a crackling fire"; wl.htmlFor = wi.id = `sw-${id}`;
@@ -744,19 +776,23 @@ function storyTools(s, id, el) {
       const nm = document.createElement("div"); nm.className = "scene-name";
       nm.textContent = `${sc.chapterTitle ? `Chapter ${sc.chapter}: ${sc.chapterTitle}. ` : ""}Scene ${sc.index + 1}${sc.heading ? `: ${sc.heading.slice(0, 60)}` : ""}`;
       const amb = document.createElement("input"); amb.type = "text"; amb.maxLength = 80;
-      amb.value = sc.sound && sc.sound.ambience && sc.sound.ambience !== "none" ? sc.sound.ambience : "";
-      amb.placeholder = "Background (leave blank for none)"; amb.setAttribute("aria-label", `Background for scene ${sc.index + 1}`);
+      amb.value = sc.sound && sc.sound.chosen ? sc.sound.ambience : "";
+      amb.placeholder = "Background: automatic (type a sound, or none)"; amb.setAttribute("aria-label", `Background for scene ${sc.index + 1}`);
       const fxBox = document.createElement("div"); fxBox.style.display = "grid"; fxBox.style.gap = "6px";
       const fxRows = [];
       const addFx = (f = { sound: "", at: "" }) => {
-        if (fxRows.length >= 6) return;
+        if (fxRows.length >= 8) return;
         const r = document.createElement("div"); r.className = "fx-row";
         const so = document.createElement("input"); so.type = "text"; so.maxLength = 60; so.value = f.sound; so.placeholder = "Effect, e.g. door knock";
         const at = document.createElement("input"); at.type = "text"; at.maxLength = 120; at.value = f.at; at.placeholder = "Plays on these words (optional)";
         const rm = document.createElement("button"); rm.type = "button"; rm.className = "small-btn warn"; rm.textContent = "Remove";
         rm.addEventListener("click", () => { r.remove(); fxRows.splice(fxRows.indexOf(entry), 1); });
-        const entry = [so, at];
-        r.append(so, at, rm); fxBox.appendChild(r); fxRows.push(entry);
+        const ev = document.createElement("label"); ev.className = "check every";
+        const evc = document.createElement("input"); evc.type = "checkbox"; evc.checked = !!f.every;
+        ev.append(evc, document.createTextNode(" every time"));
+        ev.title = "Play it each time these words are read, not just once";
+        const entry = [so, at, evc];
+        r.append(so, at, ev, rm); fxBox.appendChild(r); fxRows.push(entry);
       };
       for (const f of (sc.sound && sc.sound.effects) || []) addFx(f);
       const more = document.createElement("button"); more.type = "button"; more.className = "small-btn"; more.textContent = "Add an effect";
@@ -770,7 +806,7 @@ function storyTools(s, id, el) {
     const send = async (redesign) => {
       go.disabled = ai.disabled = true;
       const scenes = {};
-      for (const [i, amb, fx] of editors) scenes[i] = { ambience: amb.value.trim() || "none", effects: fx.map(([so, at]) => ({ sound: so.value, at: at.value })).filter((f) => f.sound.trim()) };
+      for (const [i, amb, fx] of editors) scenes[i] = { ambience: amb.value.trim(), effects: fx.map(([so, at, ev]) => ({ sound: so.value, at: at.value, every: ev.checked })).filter((f) => f.sound.trim()) };
       const r = await api(`/api/stories/${encodeURIComponent(id)}/sounds`, { wishes: wi.value, scenes, redesign });
       if (!r.ok) { go.disabled = ai.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
       const m = jobMeter(); p.appendChild(m);
@@ -886,6 +922,76 @@ async function loadUnfinished() {
   }
 }
 
+// ── clean up the writing: what the sentence checker finds, and the summary afterwards ──
+function writingReport(c) {
+  const box = document.createElement("div"); box.className = "writing-report";
+  const head = document.createElement("p"); head.className = "wr-head";
+  head.textContent = c.problems
+    ? `${c.problems} sentence or spelling problem${c.problems === 1 ? "" : "s"} found in ${c.scenes_with} of ${c.scenes} scene${c.scenes === 1 ? "" : "s"}.`
+    : "The sentence checker found nothing to fix. The proofreader can still smooth the grammar and the dialogue.";
+  box.appendChild(head);
+  if (c.examples && c.examples.length) {
+    const ul = document.createElement("ul"); ul.className = "wr-list";
+    for (const e of c.examples) {
+      const li = document.createElement("li");
+      const q = document.createElement("q"); q.textContent = e.sentence.length > 160 ? `${e.sentence.slice(0, 160)}…` : e.sentence;
+      const why = document.createElement("span"); why.className = "wr-why"; why.textContent = `Scene ${e.scene}: ${e.problem}`;
+      li.append(q, why); ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  }
+  return box;
+}
+function cleanupSummary(st) {
+  const r = (st && st.result) || {};
+  if (r.problems_before === undefined) return "Done.";
+  const failed = (r.failed || []).length ? ` ${(r.failed || []).length} couldn't be done.` : "";
+  return `Done. ${r.scenes_changed} scene${r.scenes_changed === 1 ? "" : "s"} tidied${r.stories > 1 ? ` across ${r.stories} stories` : ""}; ` +
+    `sentence problems ${r.problems_before} → ${r.problems_after}.${failed}`;
+}
+async function cleanupAll() {
+  const box = $("cleanupAll");
+  box.hidden = false; box.innerHTML = '<h3>Clean up the writing</h3><p class="hint">Checking every story…</p>';
+  const r = await api("/api/writing-check");
+  box.innerHTML = "<h3>Clean up the writing</h3>";
+  const list = (r.stories || []).filter((x) => !x.error);
+  if (!r.ok || !list.length) { box.insertAdjacentHTML("beforeend", `<p class="hint">${r.error || "No stories to clean up."}</p>`); return; }
+  const hint = document.createElement("p"); hint.className = "hint";
+  hint.textContent = "The proofreader and the sentence checker go over each story you tick, one after another. Events, names, style, heat and sounds stay the same. It runs in the background, so you can close the page.";
+  const rows = document.createElement("div"); rows.className = "wr-rows";
+  const boxes = [];
+  list.sort((a, b) => b.problems - a.problems);
+  for (const x of list) {
+    const l = document.createElement("label"); l.className = "check wr-row";
+    const c = document.createElement("input"); c.type = "checkbox"; c.checked = x.problems > 0; c.value = x.run_id;
+    const t = document.createElement("span"); t.className = "wr-title"; t.textContent = x.title || x.run_id;
+    const n = document.createElement("span"); n.className = "wr-count";
+    n.textContent = x.problems ? `${x.problems} problem${x.problems === 1 ? "" : "s"}, ${x.scenes_with} of ${x.scenes} scenes` : "looks clean";
+    l.append(c, t, n); rows.appendChild(l); boxes.push(c);
+  }
+  const rl = document.createElement("label"); rl.className = "check";
+  const rc = document.createElement("input"); rc.type = "checkbox"; rc.checked = true;
+  rl.append(rc, document.createTextNode(" Remake the audio afterwards (only changed lines are recorded again)"));
+  const bar = document.createElement("div"); bar.className = "wr-bar";
+  const go = document.createElement("button"); go.className = "go go-small"; go.type = "button";
+  const close = document.createElement("button"); close.className = "small-btn"; close.type = "button"; close.textContent = "Close";
+  close.addEventListener("click", () => { box.hidden = true; box.innerHTML = ""; });
+  const count = () => { const n = boxes.filter((c) => c.checked).length; go.textContent = `Clean up ${n} stor${n === 1 ? "y" : "ies"}`; go.disabled = n === 0; };
+  boxes.forEach((c) => c.addEventListener("change", count)); count();
+  const msg = document.createElement("p"); msg.className = "settings-msg";
+  bar.append(go, close);
+  box.append(hint, rows, rl, bar, msg);
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    const res = await api("/api/cleanup", { ids: boxes.filter((c) => c.checked).map((c) => c.value), remake: rc.checked });
+    if (!res.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = res.error; return; }
+    const m = jobMeter(); box.insertBefore(m, msg);
+    followJob(res.job_id, m, (st) => { msg.className = "settings-msg"; msg.textContent = cleanupSummary(st); loadLibrary(); },
+      (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });
+  });
+}
+$("cleanupAllBtn").addEventListener("click", cleanupAll);
+
 async function loadLibrary() {
   loadUnfinished();
   const r = await api("/api/stories");
@@ -962,7 +1068,7 @@ loadSeries();
 loadLibrary();
 
 // ── the same work on every device: a story started on the Mac shows its progress on the iPad and iPhone too ──
-const JOB_NAMES = { remaster: "Remaking the audio", rewrite: "Rewriting" };
+const JOB_NAMES = { remaster: "Remaking the audio", rewrite: "Rewriting", cleanup: "Cleaning up the writing" };
 const seenDone = new Set();
 async function checkActive() {
   if (document.hidden) return;

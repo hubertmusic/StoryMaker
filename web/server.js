@@ -709,6 +709,36 @@ app.post("/api/stories/:id/rewrite", async (req, res) => {
     ...(typeof b.keywords === "string" ? ["--keywords", b.keywords.slice(0, 600)] : [])];
   res.json(startJob(req, "rewrite", id, await runStorymaker(req.user, args, String(b.instructions || "").slice(0, 2000))));
 });
+// Clean up the writing of stories already made: the proofreader and the sentence checker, then the audio again.
+app.get("/api/stories/:id/writing-check", async (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const r = await runStorymaker(req.user, ["--check-writing", id]);
+  res.json(r.ok ? { ok: true, ...(r.stories[0] || {}) } : r);
+});
+app.post("/api/stories/:id/cleanup", async (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const b = req.body || {};
+  const args = ["--cleanup", id, "--background", ...(b.remake === false ? ["--no-remake"] : [])];
+  res.json(startJob(req, "cleanup", id, await runStorymaker(req.user, args)));
+});
+function cleanableStories(user) {           // your own stories (the owner: everyone's), that you're allowed to change
+  const mine = new Set(db.prepare("SELECT id FROM stories WHERE user_id = ?").all(user.id).map((r) => r.id));
+  return syncStories().filter((id) => canSee(user, id) && (user.role === "owner" || mine.has(id)))
+    .filter((id) => { const r = readResult(id) || {}; return r.level !== "explicit" || allowedLevels(user).includes("explicit"); });
+}
+app.get("/api/writing-check", async (req, res) => {
+  const ids = cleanableStories(req.user);
+  if (!ids.length) return res.json({ ok: true, stories: [] });
+  res.json(await runStorymaker(req.user, ["--check-writing", ids.join(",")]));
+});
+app.post("/api/cleanup", async (req, res) => {
+  const b = req.body || {};
+  const allowed = new Set(cleanableStories(req.user));
+  const ids = (Array.isArray(b.ids) ? b.ids : []).map((x) => storyId(String(x))).filter((x) => x && allowed.has(x));
+  if (!ids.length) return res.json({ ok: false, error: "Pick at least one story." });
+  const args = ["--cleanup", ids.join(","), "--background", ...(b.remake === false ? ["--no-remake"] : [])];
+  res.json(startJob(req, "cleanup", ids[0], await runStorymaker(req.user, args)));
+});
 app.post("/api/stories/:id/remaster", async (req, res) => {
   const id = guard(req, res); if (!id) return;
   const b = req.body || {};
@@ -747,8 +777,8 @@ app.post("/api/stories/:id/sounds", async (req, res) => {
   for (const [k, plan] of Object.entries(b.scenes || {})) {
     if (!/^\d{1,4}$/.test(k) || typeof plan !== "object" || !plan) continue;
     scenes[k] = { ambience: String(plan.ambience || "").slice(0, 80),
-      effects: (Array.isArray(plan.effects) ? plan.effects : []).slice(0, 6)
-        .map((f) => ({ sound: String((f && f.sound) || "").slice(0, 60), at: String((f && f.at) || "").slice(0, 120) })) };
+      effects: (Array.isArray(plan.effects) ? plan.effects : []).slice(0, 8)
+        .map((f) => ({ sound: String((f && f.sound) || "").slice(0, 60), at: String((f && f.at) || "").slice(0, 120), every: !!(f && f.every) })) };
   }
   const payload = { wishes: String(b.wishes || "").slice(0, 300), ...(b.redesign ? {} : { scenes }) };
   const r = await runStorymaker(req.user, ["--set-sounds", id], JSON.stringify(payload));

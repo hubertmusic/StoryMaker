@@ -26,7 +26,8 @@ const LEVEL_NAMES = { "young-kids": "Young kids", kids: "Kids", "middle-grade": 
   adult: "Adults", family: "Everyone", mature: "Mature", explicit: "Explicit 18+" };
 const AGES = [["child", "Child"], ["teen", "Teen"], ["adult", "Adult"], ["elder", "Elder"]];
 const PITCH = [["", "Natural"], ["^0.94", "Deeper"], ["^1.04", "Brighter"], ["^1.08", "Younger"]];
-const JOBS = { cast: "Finding who speaks", sounds: "Choosing the sounds", record: "Recording", all: "Making the audiobook" };
+const JOBS = { cast: "Finding who speaks", sounds: "Choosing the sounds", record: "Recording", all: "Making the audiobook",
+  tidy: "Cleaning up the writing" };
 const GENDER_WORD = (c) => c.gender === "female"
   ? { child: "girl", teen: "teenage girl", adult: "woman", elder: "older woman" }[c.age || "adult"]
   : { child: "boy", teen: "teenage boy", adult: "man", elder: "older man" }[c.age || "adult"];
@@ -106,8 +107,47 @@ async function showHome() {
 document.querySelectorAll("input[name=src]").forEach((r) => r.addEventListener("change", () => {
   const v = document.querySelector("input[name=src]:checked").value;
   $("srcSm").hidden = v !== "sm"; $("srcFile").hidden = v !== "file"; $("srcPaste").hidden = v !== "paste";
-  $("titleRow").hidden = $("levelRow").hidden = v === "sm";
+  $("srcFree").hidden = v !== "free";
+  $("titleRow").hidden = v === "sm" || v === "free";
+  $("levelRow").hidden = v === "sm";
+  // StoryMaker stories were proofread when they were written; a book or a PDF is cleaned up unless you say not to
+  $("cleanUp").checked = v !== "sm";
 }));
+$("cleanUp").checked = document.querySelector("input[name=src]:checked").value !== "sm";
+
+// free books: Project Gutenberg, found by title, author or a description (the AI works out which book you mean)
+let pickedBook = null;
+async function searchBooks() {
+  const q = $("bookQuery").value.trim();
+  const box = $("bookResults");
+  if (!q) return;
+  pickedBook = null;
+  box.replaceChildren(el("p", { class: "hint", text: "Looking…" }));
+  $("bookSearch").disabled = true;
+  const r = await api(`/api/books/search?q=${encodeURIComponent(q)}`);
+  $("bookSearch").disabled = false;
+  box.replaceChildren();
+  if (!r.ok) { box.append(el("p", { class: "error", text: r.error || "The search didn't work." })); return; }
+  if (!r.results.length && !r.not_free.length) box.append(el("p", { class: "hint", text: "Nothing found. Try the title, the author, or describe the book." }));
+  for (const b of r.results) {
+    const input = el("input", { type: "radio", name: "freeBook", value: String(b.id), disabled: !b.readable });
+    input.addEventListener("change", () => { pickedBook = b; });
+    box.append(el("label", { class: `book-hit${b.readable ? "" : " off"}` }, input,
+      el("span", { class: "bh-main" },
+        el("span", { class: "bh-title", text: b.title }),
+        el("span", { class: "bh-meta", text: [b.authors, b.years ? `(${b.years})` : "", b.readable ? "" : "no text version"].filter(Boolean).join(" ") }),
+        b.note ? el("span", { class: "bh-note", text: b.note }) : "")));
+  }
+  for (const b of r.not_free) {
+    box.append(el("div", { class: "book-hit off" }, el("span", { class: "bh-main" },
+      el("span", { class: "bh-title", text: `${b.title}${b.author ? `, ${b.author}` : ""}` }),
+      el("span", { class: "bh-note", text: b.note }))));
+  }
+  const first = box.querySelector("input[name=freeBook]:not([disabled])");
+  if (first) { first.checked = true; pickedBook = r.results.find((b) => String(b.id) === first.value); }
+}
+$("bookSearch").addEventListener("click", searchBooks);
+$("bookQuery").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); searchBooks(); } });
 function showError(msg) { $("importErr").textContent = msg || "That didn't work."; $("importErr").hidden = false; }
 $("importForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -116,20 +156,24 @@ $("importForm").addEventListener("submit", async (e) => {
   const level = (document.querySelector("input[name=level]:checked") || {}).value || "family";
   let r;
   $("importGo").disabled = true; $("importGo").textContent = "Bringing it in…";
+  const clean = $("cleanUp").checked;
   if (src === "sm") {
     if (!$("smStory").value) { showError("Pick a story first."); r = null; }
-    else r = await api("/api/import/storymaker", { json: { id: $("smStory").value } });
+    else r = await api("/api/import/storymaker", { json: { id: $("smStory").value, clean } });
+  } else if (src === "free") {
+    if (!pickedBook) { showError("Search for a book and pick one first."); r = null; }
+    else { $("importGo").textContent = "Downloading the book…"; r = await api("/api/import/gutenberg", { json: { id: pickedBook.id, level, clean } }); }
   } else if (src === "file") {
     const f = $("bookFile").files[0];
     if (!f) { showError("Choose a book file first."); r = null; }
     else {
       const fd = new FormData();
-      fd.append("file", f); fd.append("title", $("bookTitle").value); fd.append("level", level);
+      fd.append("file", f); fd.append("title", $("bookTitle").value); fd.append("level", level); fd.append("clean", clean ? "1" : "");
       r = await api("/api/import/file", { method: "POST", body: fd });
     }
   } else {
     if (!$("pasteText").value.trim()) { showError("Paste some text first."); r = null; }
-    else r = await api("/api/import/text", { json: { title: $("bookTitle").value, text: $("pasteText").value, level } });
+    else r = await api("/api/import/text", { json: { title: $("bookTitle").value, text: $("pasteText").value, level, clean } });
   }
   $("importGo").disabled = false; $("importGo").textContent = "Bring it in";
   if (!r) return;
@@ -186,6 +230,7 @@ function renderRun(st) {
   else if (st.state === "failed") { state = "Stopped by a problem."; detail = `${st.error || ""} Press the button again to carry on.`; }
   else if (st.state === "stopped") state = "Stopped.";
   else if (book.files.m4b) { state = "The audiobook is ready."; detail = "Listen in step 5. Change anything and record again: only what changed is redone."; }
+  else if (book.tidyPending) { state = "Ready when you are."; detail = "The writing is cleaned up first, then the cast is found. Make the whole audiobook in one go, or start with step 1."; }
   else if (!book.castDone) { state = "Ready when you are."; detail = "Check the cast first (step 1), or make the whole audiobook in one go."; }
   else { state = "Cast and ready to record."; detail = "Check the script and sounds, then record."; }
   $("runState").textContent = state; $("runDetail").textContent = detail;
@@ -226,11 +271,16 @@ function startPolling() {
 }
 
 // ───────────────────────── 1 · cast ─────────────────────────
+const VOICE_GROUPS = [["own", "Your own voices"], ["standard", "Voices"], ["character", "Character voices"], ["accent", "With an accent"]];
 function voiceOptions(gender, current) {
   const base = (current || "").replace(/\^[\d.]+$/, "");
   const list = voices.filter((v) => !gender || v.gender === gender || v.id === base);
-  return list.map((v) => el("option", { value: v.id, selected: v.id === base,
-    text: `${v.name} · ${v.accent ? v.accent + ", " : ""}${v.note}${v.own ? " (your clip)" : ""}` }));
+  const opt = (v) => el("option", { value: v.id, selected: v.id === base,
+    text: `${v.name} · ${v.accent ? v.accent + ", " : ""}${v.note}${v.own ? " (your clip)" : ""}` });
+  return VOICE_GROUPS.map(([g, label]) => {
+    const inGroup = list.filter((v) => (v.group || (v.own ? "own" : "standard")) === g);
+    return inGroup.length ? el("optgroup", { label }, inGroup.map(opt)) : null;
+  }).filter(Boolean);
 }
 function pitchSelect(current) {
   const m = /(\^[\d.]+)$/.exec(current || "");
@@ -355,7 +405,18 @@ function whoClass(name) {
   const c = book.cast.find((x) => x.name === name);
   return c ? (c.gender === "female" ? "she" : "he") : "";
 }
+function renderTidy() {
+  const n = $("tidyNote"), t = book.tidyResult;
+  n.hidden = !(book.tidyPending || t);
+  if (book.tidyPending) n.textContent = "The spelling and sentences will be cleaned up before anything is cast or recorded.";
+  else if (t) n.textContent = `Writing cleaned up: ${t.changed} of ${t.sections} sections changed; sentence problems ${t.before} → ${t.after}.`;
+}
+$("tidyBtn").onclick = async () => {
+  if (!confirm("Clean up the spelling and sentences of the whole book? Changed sections are cast again, and their lines are recorded again next time you record.")) return;
+  if (await startJob("tidy")) { book.tidyPending = true; renderTidy(); }
+};
 function renderScript() {
+  renderTidy();
   const pick = $("chapterPick");
   pick.replaceChildren(...book.chapters.map((ch, i) => {
     const n = ch.sections.reduce((a, s) => a + s.lines.filter((l) => l.check).length, 0);
@@ -426,6 +487,8 @@ function fxRow(fx = {}) {
   const row = el("div", { class: "fx-row" },
     el("input", { type: "text", class: "fx-s", value: fx.sound || "", placeholder: "door knock", maxlength: "60", "aria-label": "Sound" }),
     el("input", { type: "text", class: "fx-at", value: fx.at || "", placeholder: "when: words from the text", maxlength: "120", "aria-label": "When" }),
+    el("label", { class: "check every", title: "Play it each time these words are read, not just once" },
+      el("input", { type: "checkbox", class: "fx-every", checked: !!fx.every }), " every time"),
     el("button", { type: "button", class: "small-btn warn", text: "Remove", onclick: () => row.remove() }));
   return row;
 }
@@ -440,16 +503,17 @@ function renderSounds() {
     box.append(el("div", { class: "sound-scene", "data-id": sec.id },
       el("div", { class: "scene-name" }, ch.title, ch.sections.length > 1 ? el("small", { text: ` · scene ${si + 1}` }) : ""),
       el("p", { class: "excerpt", text: words.slice(0, 170) + (words.length > 170 ? "…" : "") }),
-      el("input", { type: "text", class: "amb", value: snd.ambience === "none" ? "" : snd.ambience || "", maxlength: "80",
-        placeholder: "background, e.g. waves on a harbor (blank for none)", "aria-label": "Background" }),
+      el("input", { type: "text", class: "amb", value: snd.chosen ? snd.ambience || "" : "", maxlength: "80",
+        placeholder: "background: automatic (type a sound, or none)", "aria-label": "Background" }),
       fx, el("button", { type: "button", class: "small-btn fx-add", text: "Add an effect", onclick: () => fx.append(fxRow()) })));
   }));
 }
 async function saveSounds(quiet) {
   const sounds = {};
   document.querySelectorAll(".sound-scene").forEach((s) => {
-    sounds[s.dataset.id] = { ambience: s.querySelector(".amb").value.trim() || "none",
-      effects: [...s.querySelectorAll(".fx-row")].map((r) => ({ sound: r.querySelector(".fx-s").value.trim(), at: r.querySelector(".fx-at").value.trim() })).filter((f) => f.sound) };
+    sounds[s.dataset.id] = { ambience: s.querySelector(".amb").value.trim(),
+      effects: [...s.querySelectorAll(".fx-row")].map((r) => ({ sound: r.querySelector(".fx-s").value.trim(), at: r.querySelector(".fx-at").value.trim(),
+        every: r.querySelector(".fx-every").checked })).filter((f) => f.sound) };
   });
   const r = await api(`/api/projects/${book.id}/sounds`, { json: { sounds, wishes: $("wishes").value.trim() } });
   if (!quiet) $("soundsSaved").textContent = r.ok ? "Saved." : r.error || "Not saved.";
@@ -473,7 +537,12 @@ $("voiceModel").addEventListener("change", async () => {
   await api(`/api/projects/${book.id}/settings`, { json: { voiceModel: $("voiceModel").value } });
   book.voiceModel = $("voiceModel").value;
 });
+$("musicOn").addEventListener("change", async () => {
+  book.music = $("musicOn").checked ? "on" : "off";
+  await api(`/api/projects/${book.id}/settings`, { json: { music: book.music } });
+});
 function renderRecord() {
+  $("musicOn").checked = (book.music || "on") === "on";
   $("acting").value = book.acting || 1; $("actingOut").textContent = ACTING_WORDS(Number($("acting").value));
   $("voiceModel").value = book.voiceModel || "standard";
   $("actingRow").hidden = !me.chatterbox;

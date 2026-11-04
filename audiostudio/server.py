@@ -273,6 +273,13 @@ def keep_style(user, pid):
         E.save_project(d, p)
 
 
+def tidy_after_import(pid, clean):
+    """"Clean up the writing" was chosen: the book's writing is cleaned up first, in the background."""
+    if clean:
+        E.start_tidy(cfg, pid)
+        worker.submit(pid, "tidy")
+
+
 @app.post("/api/import/storymaker")
 def import_sm(body: dict = Body(...), user=Depends(current_user)):
     sid = str(body.get("id", ""))
@@ -293,6 +300,7 @@ def import_sm(body: dict = Body(...), user=Depends(current_user)):
     check_level(user, full.get("level") or "family")
     pid = E.import_storymaker(cfg, user["id"], full, sid)
     keep_style(user, pid)
+    tidy_after_import(pid, bool(body.get("clean")))
     d, p, _ = E.load_project(cfg, pid)
     for name in ("cover.jpg", "thumb.jpg"):            # the story's cover art, if it has one
         try:
@@ -308,7 +316,7 @@ def import_sm(body: dict = Body(...), user=Depends(current_user)):
 
 @app.post("/api/import/file")
 def import_file(file: UploadFile = File(...), title: str = Form(""), level: str = Form("family"),
-                user=Depends(current_user)):
+                clean: str = Form(""), user=Depends(current_user)):
     level = check_level(user, level)
     suffix = Path(file.filename or "book.txt").suffix.lower()
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -318,6 +326,7 @@ def import_file(file: UploadFile = File(...), title: str = Form(""), level: str 
     try:
         pid = E.import_file(cfg, user["id"], tmp.name, file.filename or "book.txt", title.strip()[:120], level)
         keep_style(user, pid)
+        tidy_after_import(pid, clean in ("1", "true", "on"))
     finally:
         Path(tmp.name).unlink(missing_ok=True)
     return {"ok": True, "id": pid}
@@ -331,6 +340,31 @@ def import_text(body: dict = Body(...), user=Depends(current_user)):
         raise HTTPException(413, "That's too much text to paste; upload it as a file.")
     pid = E.import_text(cfg, user["id"], str(body.get("title", ""))[:120], text, level)
     keep_style(user, pid)
+    tidy_after_import(pid, bool(body.get("clean")))
+    return {"ok": True, "id": pid}
+
+
+@app.get("/api/books/search")
+def books_search(q: str = "", user=Depends(current_user)):
+    try:
+        return {"ok": True, **E.find_books(cfg, q)}
+    except ValueError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/import/gutenberg")
+def import_gutenberg(body: dict = Body(...), user=Depends(current_user)):
+    level = check_level(user, body.get("level", "family"))
+    try:
+        book_id = int(body.get("id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Unknown book.")
+    try:
+        pid = E.import_gutenberg(cfg, user["id"], book_id, level)
+    except requests.RequestException:
+        raise HTTPException(502, "Couldn't download that book from Project Gutenberg. Try again in a minute.")
+    keep_style(user, pid)
+    tidy_after_import(pid, bool(body.get("clean")))
     return {"ok": True, "id": pid}
 
 
@@ -346,9 +380,11 @@ def project(pid: str, user=Depends(current_user)):
     st["queued_or_running"] = st.get("state") in ("queued", "running")
     return {"ok": True, "id": pid, "title": p["title"], "level": p["level"], "engine": p.get("engine"),
             "voiceModel": p.get("voice_model") or cfg.get("CHATTERBOX_MODEL", "standard"), "acting": p.get("acting", 1.0),
+            "music": p.get("music", "on"),
             "narrator": p.get("narrator"), "cast": p["cast"], "castDone": p.get("cast_done", False),
             "soundsDone": p.get("sounds_done", False), "soundWishes": p.get("sound_wishes", ""),
             "narratorLines": p.get("narrator_lines", 0), "words": p.get("words", 0), "source": p.get("source"),
+            "tidyPending": p.get("tidy_pending", False), "tidyResult": p.get("tidy_result"),
             "chapters": chapters, "status": st, "files": files_of(d, p)}
 
 
@@ -370,6 +406,8 @@ def settings(pid: str, body: dict = Body(...), user=Depends(current_user)):
             p["acting"] = round(max(0.6, min(1.6, float(body["acting"]))), 2)
         except (TypeError, ValueError):
             pass
+    if body.get("music") in ("on", "off"):
+        p["music"] = body["music"]
     if isinstance(body.get("title"), str) and body["title"].strip():
         p["title"] = body["title"].strip()[:120]
     E.save_project(d, p)
@@ -411,9 +449,11 @@ def sounds(pid: str, body: dict = Body(...), user=Depends(current_user)):
 def job(pid: str, body: dict = Body(...), user=Depends(current_user)):
     d, p, s = project_for(user, pid)
     kind = body.get("kind")
-    if kind not in ("cast", "sounds", "record", "all"):
+    if kind not in ("cast", "sounds", "record", "all", "tidy"):
         raise HTTPException(400, "Unknown job.")
     kw = {}
+    if kind == "tidy":
+        E.start_tidy(cfg, pid)
     if kind == "cast" and body.get("redo"):
         kw["only"] = [sec["id"] for ch in p["chapters"] for sec in ch["sections"]]
     if kind == "sounds":

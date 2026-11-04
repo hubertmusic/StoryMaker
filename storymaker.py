@@ -134,11 +134,16 @@ DEFAULTS = {
     # Kokoro character voices: "voice", a blend "a+b", "^pitch" (1.05 = a little higher) — ordered so
     # the first few characters of each kind sound as different from each other as possible.
     "KOKORO_VOICES": ("female=bf_emma,af_bella,af_nicole+bf_isabella^1.03,af_sky^1.04,af_sarah+af_kore^0.97,"
-                      "bf_isabella^0.95,af_aoede+bf_lily^1.02,af_jessica,af_river+af_nova^0.98,af_alloy^1.05;"
+                      "bf_isabella^0.95,af_aoede+bf_lily^1.02,af_jessica,af_river+af_nova^0.98,af_alloy^1.05,"
+                      "af_bella+bf_isabella,af_heart+bf_emma,af_jessica+af_sarah,af_nova+af_jessica,af_kore+af_river,"
+                      "bf_emma+bf_alice,af_aoede+af_heart,af_nicole+af_bella;"
                       "male=am_michael,bm_george,am_fenrir^0.95,am_puck^1.03,am_liam+am_eric,bm_daniel^0.97,"
-                      "am_onyx^0.94,am_adam^1.02;"
-                      "girl=af_sky^1.08,af_nova^1.06;boy=am_echo^1.08,am_puck^1.1;old_woman=bf_alice^0.95,bf_isabella^0.92;"
-                      "old_man=bm_lewis^0.93,bm_daniel^0.9;creature=am_onyx^0.85,bm_fable^0.9"),
+                      "am_onyx^0.94,am_adam^1.02,bm_daniel+am_michael,am_michael+bm_fable,am_eric+am_adam,"
+                      "am_michael+am_fenrir,am_onyx+bm_george,bm_fable+bm_daniel,am_liam+am_puck,am_echo+bm_daniel;"
+                      "girl=af_sky^1.08,af_nova^1.06,af_sky+af_nova^1.06;boy=am_echo^1.08,am_puck^1.1,am_puck+am_echo^1.06;"
+                      "old_woman=bf_alice^0.95,bf_isabella^0.92,bf_alice+bf_isabella;"
+                      "old_man=bm_lewis^0.93,bm_daniel^0.9,bm_lewis+bm_george,am_fenrir+bm_lewis;"
+                      "creature=am_onyx^0.85,bm_fable^0.9,am_onyx+am_fenrir^0.92,am_santa+am_onyx"),
 
     "BOOK": "on",                          # picture-book PDF in video mode (free: uses the video's frames)
     "LEVEL": "family",                     # default reading level (see --level)
@@ -159,6 +164,8 @@ DEFAULTS = {
     "MUSIC": "on",
     "MUSIC_DIR": "~/StoryMaker/music",
     "MUSIC_VOLUME": "0.18",
+    "MUSIC_MODE": "under",                 # under = softly all through; moments = only the start, chapters and end
+    "INTIMATE_SOUNDS": "on",               # explicit love scenes: soft breathing and moans at the right moments
 
     "NOTIFY": "background",                # background | always | off
     "NTFY_SERVER": "https://ntfy.sh",
@@ -2356,6 +2363,33 @@ KOKORO_CATALOGUE = [
     ("bm_george", "George", "male", "British", "classic"), ("bm_fable", "Fable", "male", "British", "storyteller"),
     ("bm_daniel", "Daniel", "male", "British", "calm"), ("bm_lewis", "Lewis", "male", "British", "older"),
     ("am_santa", "Nick", "male", "American", "jolly, deep"),
+    # character voices: two voices blended into a new one, each with its own colour
+    ("af_bella+bf_isabella", "Scarlett", "female", "Mid-Atlantic", "smoky, sultry"),
+    ("af_nicole+af_bella", "Delilah", "female", "American", "breathy, intimate"),
+    ("af_heart+bf_emma", "Grace", "female", "Mid-Atlantic", "gentle storyteller"),
+    ("af_sky+af_nova", "Pippa", "female", "American", "bubbly, quick"),
+    ("bf_alice+bf_isabella", "Margaret", "female", "British", "dignified, low"),
+    ("af_kore+af_river", "Vera", "female", "American", "cool, composed"),
+    ("af_jessica+af_sarah", "Kayla", "female", "American", "chatty, warm"),
+    ("bf_lily+af_sky", "Rosie", "female", "Mid-Atlantic", "playful, light"),
+    ("af_aoede+af_heart", "Hazel", "female", "American", "dreamy, soft"),
+    ("bf_emma+bf_alice", "Eleanor", "female", "British", "elegant, poised"),
+    ("af_alloy+af_kore", "Morgan", "female", "American", "firm, no-nonsense"),
+    ("af_nova+af_jessica", "Jade", "female", "American", "sassy, energetic"),
+    ("af_river+bf_lily", "Willow", "female", "Mid-Atlantic", "wistful, quiet"),
+    ("am_onyx+bm_george", "Victor", "male", "Mid-Atlantic", "commanding, dark"),
+    ("am_fenrir+bm_lewis", "Silas", "male", "Mid-Atlantic", "gravelly, weathered"),
+    ("am_michael+bm_fable", "Theo", "male", "Mid-Atlantic", "warm narrator"),
+    ("am_puck+am_echo", "Finn", "male", "American", "cheeky, quick"),
+    ("bm_daniel+am_michael", "Julian", "male", "Mid-Atlantic", "smooth, romantic"),
+    ("am_onyx+am_fenrir", "Rook", "male", "American", "menacing, deep"),
+    ("am_eric+am_adam", "Cole", "male", "American", "everyman, steady"),
+    ("bm_lewis+bm_george", "Edmund", "male", "British", "grandfatherly, wise"),
+    ("am_liam+am_puck", "Jesse", "male", "American", "boyish charm"),
+    ("bm_fable+bm_daniel", "Oliver", "male", "British", "gentle, thoughtful"),
+    ("am_santa+am_onyx", "Bear", "male", "American", "booming, big"),
+    ("am_michael+am_fenrir", "Wade", "male", "American", "rugged, warm"),
+    ("am_echo+bm_daniel", "Ezra", "male", "Mid-Atlantic", "soft-spoken"),
     # other accents: these voices speak English with their own accent
     ("ff_siwis", "Siwis", "female", "French accent", "soft, elegant"),
     ("ef_dora", "Dora", "female", "Spanish accent", "warm"), ("em_alex", "Alejandro", "male", "Spanish accent", "friendly"),
@@ -2377,6 +2411,11 @@ KOKORO_CATALOGUE = [
     ("am_eric+hm_omega", "Dev", "male", "light Indian accent", "confident"),
     ("am_liam+pm_alex", "Lucas", "male", "light Brazilian accent", "young"),
 ]
+def voice_group(v):
+    """standard (one of Kokoro's own voices), character (a blend with its own colour) or accent."""
+    return "accent" if "accent" in v[3] else "character" if "+" in v[0] else "standard"
+
+
 VOICE_SPEC = re.compile(r"^[abefhijpz][fm]_[a-z]+(\+[abefhijpz][fm]_[a-z]+)?(\^(0\.[89]\d?|1\.[01]\d?))?$")
 SAMPLE_TEXT = ("Hello. This is how I sound when I read your story. "
                "“Are you coming with me?” she asked. “Always,” he said, and smiled.")
@@ -2627,16 +2666,66 @@ def assign_voices(cfg, engine, cast, saved=None):
 
 
 
-def speak_line(cfg, text, wav, engine, vinfo):
+# how a line is said, from its speech tag ("she whispered", "he snapped", "she said softly") or its punctuation
+LINE_EMOTIONS = [
+    ("whisper", r"whisper\w*|murmur\w*|breathed|under (?:her|his|their) breath|hush\w*"),
+    ("shout", r"shout\w*|yell\w*|scream\w*|roar\w*|bellow\w*|hollered|called out|cried out"),
+    ("angry", r"snap\w*|snarl\w*|growl\w*|hiss\w*|spat|barked|seethed|angrily|furious\w*"),
+    ("sad", r"sob\w*|wept|weeping|choked|sniffl\w*|sadly|quietly, (?:her|his) voice break\w*|voice cracked"),
+    ("laugh", r"laugh\w*|giggl\w*|chuckl\w*|grinn\w*|teas\w*"),
+    ("fearful", r"stammer\w*|stutter\w*|trembl\w*|shaking|nervously|panick\w*"),
+    ("tender", r"softly|gently|tender\w*|quietly|soothing\w*|reassur\w*"),
+    ("seductive", r"purr\w*|moan\w*|husk\w*|sultr\w*|breathless\w*|breathily"),
+    ("excited", r"exclaim\w*|excited\w*|gush\w*|squeal\w*|beam\w*"),
+]
+_LINE_EMO = [(e, re.compile(r"\b(?:" + p_ + r")\b", re.I)) for e, p_ in LINE_EMOTIONS]
+# Kokoro: (speed, pitch, loudness change in dB, extra sound shaping)
+EMOTION_KOKORO = {
+    "whisper": (0.9, 0.98, -7, "highpass=f=200,treble=g=3"), "shout": (1.08, 1.04, 3, None),
+    "angry": (1.07, 0.98, 2, None), "sad": (0.88, 0.97, -3, None), "laugh": (1.05, 1.03, 0, None),
+    "fearful": (1.06, 1.03, -1, None), "tender": (0.92, 0.99, -3, None), "seductive": (0.88, 0.97, -4, None),
+    "excited": (1.08, 1.04, 1, None),
+}
+
+
+def line_emotion(narration, spoken):
+    """How a line of dialogue is said, from the words around it in the story."""
+    t = (spoken or "").strip()
+    i = (narration or "").find(t[:60]) if t else -1
+    around = ""
+    if i >= 0:
+        after = narration[i + len(t):i + len(t) + 110]
+        before = narration[max(0, i - 80):i]
+        before = re.split(r"[”\"]|(?<=[.!?])\s", before)[-1]           # only a tag that leads into this line
+        around = re.split(r"(?<=[.!?])\s|“", after, maxsplit=1)[0] + " " + before.rstrip("“ ")
+    for emo, rx in _LINE_EMO:
+        if rx.search(around):
+            return emo
+    if t.endswith("!") and (t.count("!") > 1 or re.search(r"\b[A-Z]{3,}\b", t)):
+        return "shout"
+    if t.endswith("!"):
+        return "excited"
+    return ""
+
+
+def speak_line(cfg, text, wav, engine, vinfo, emotion=""):
     """Speak one line, falling back to the narrator voice and then to silence."""
     tries = [(vinfo["voice"], VOICE_STYLE.get(vinfo["type"])) if vinfo else (None, None), (None, None)]
     if engine == "kokoro" and vinfo and vinfo.get("voice") and "@" not in vinfo["voice"]:
-        # a little acting for the free voices: excited lines a touch quicker, hesitant or trailing ones slower
+        # acting for the free voices: the way the story says it's said (whispered, shouted, sobbed…), otherwise
+        # excited lines a touch quicker and hesitant or trailing ones slower
         t = text.strip()
         pace = 1.07 if t.endswith("!") else 0.93 if t.endswith(("...", "…")) or t.count(",") >= 4 else \
             1.03 if t.endswith("?") else 1.0
-        if pace != 1.0:
-            tries.insert(0, (f"{vinfo['voice']}@{pace}", VOICE_STYLE.get(vinfo["type"])))
+        spec = vinfo["voice"]
+        if emotion in EMOTION_KOKORO:
+            sp_, pi_, _g, _f = EMOTION_KOKORO[emotion]
+            pace = sp_
+            m = re.search(r"\^([\d.]+)", spec)
+            pitch = round(max(0.8, min(1.19, (float(m.group(1)) if m else 1.0) * pi_)), 3)
+            spec = re.sub(r"\^[\d.]+", "", spec) + (f"^{pitch}" if abs(pitch - 1) > 0.005 else "")
+        if pace != 1.0 or spec != vinfo["voice"]:
+            tries.insert(0, (f"{spec}@{pace}" if pace != 1.0 else spec, VOICE_STYLE.get(vinfo["type"])))
     for voice, style in tries:
         try:
             narrate(cfg, text, wav, engine, voice, style)
@@ -2703,17 +2792,24 @@ def record_voices(cfg, story, job, parts_dir, saved_voices=None, fresh_voices=Fa
     parts_dir.mkdir(parents=True, exist_ok=True)
     used = set()
 
-    def part(name, text, vinfo):
+    def part(name, text, vinfo, emotion=""):
         who = (vinfo or {}).get("voice") or "narrator:" + str(cfg.get(DEFAULT_VOICE_KEY.get(engine, ""), ""))
-        spec = f"{engine}|{who}|{cfg.get('KOKORO_SPEED')}|{text}"
+        acted = emotion if engine == "kokoro" and vinfo and emotion in EMOTION_KOKORO else ""
+        spec = f"{engine}|{who}|{cfg.get('KOKORO_SPEED')}|{text}" + (f"|{acted}" if acted else "")
         key = hashlib.sha1(spec.encode()).hexdigest()[:16]
         lv = parts_dir / f"{key}.flac"
         used.add(lv.name)
         if not valid_media(lv):
             raw, wav = job / f"v_{key}.wav", job / f"lv_{key}.wav"
-            speak_line(cfg, text, raw, engine, vinfo)
+            speak_line(cfg, text, raw, engine, vinfo, acted)
             level_match(raw, wav)
-            run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), "-c:a", "flac", str(lv)])
+            shape = []
+            if acted:                                   # a whisper is quieter, a shout louder, after levelling
+                _s, _p, gain, extra = EMOTION_KOKORO[acted]
+                shape = ([extra] if extra else []) + ([f"volume={gain}dB"] if gain else []) + \
+                    (["alimiter=limit=0.89:level=false"] if gain > 0 else [])
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), *(["-af", ",".join(shape)] if shape else []),
+                 "-c:a", "flac", str(lv)])
             raw.unlink(missing_ok=True)
             wav.unlink(missing_ok=True)
         return lv
@@ -2730,7 +2826,8 @@ def record_voices(cfg, story, job, parts_dir, saved_voices=None, fresh_voices=Fa
         if multi:
             for k, ln in enumerate(sc["lines"]):
                 who = str(ln.get("speaker", "")).strip() or "Narrator"
-                parts.append((part(f"{i:03d}_{k:03d}", str(ln["text"]).strip(), voices["voices"].get(who.lower())),
+                emo = line_emotion(sc["narration"], str(ln["text"]).strip()) if who != "Narrator" else ""
+                parts.append((part(f"{i:03d}_{k:03d}", str(ln["text"]).strip(), voices["voices"].get(who.lower()), emo),
                               who, str(ln["text"]).strip()))
         else:
             parts.append((part(f"{i:03d}_all", sc["narration"], None), "Narrator", sc["narration"]))
@@ -2785,14 +2882,17 @@ def record_voices(cfg, story, job, parts_dir, saved_voices=None, fresh_voices=Fa
 # ── sound design ──
 SOUND_PROMPT = """You are the sound designer for an audiobook of the story "{title}" ({genre}, for {audience}).
 For each scene below, choose:
-- "ambience": the continuous background sound that fits WHERE the scene happens, written as a short
-  search phrase for a sound-effects library, for example: "heavy rain on window", "ocean waves on beach",
-  "busy city street traffic", "crickets at night countryside", "crackling fireplace", "quiet cafe
-  chatter", "forest birds morning", "inside moving car", "office room tone", "quiet bedroom night".
-  Use "none" if quiet fits better.
-- "effects": up to {max_fx} short sound effects for specific moments, each with "sound" (a short search
-  phrase like "door knock", "glass clinking", "thunder clap", "phone vibrating", "footsteps on wood")
-  and "at" (5 to 10 words copied EXACTLY from the scene, where the sound should happen).
+- "ambience": a background sound ONLY when the text itself names a place with a sound you'd clearly notice,
+  written as a short search phrase for a sound-effects library, for example: "heavy rain on window", "ocean
+  waves on beach", "busy city street traffic", "crickets at night countryside", "crackling fireplace", "busy
+  cafe chatter", "forest birds morning", "inside moving car". Most scenes should be "none": indoors, quiet
+  rooms, bedrooms, offices, conversations and thoughts are "none". Never use room tone, hum, drone, white
+  noise or "quiet" anything.
+- "effects": up to {max_fx} short sound effects, ONLY for things that actually happen in the scene and make a
+  sound (a door is knocked on, a glass breaks, thunder cracks, a phone rings). Each has "sound" (a short search
+  phrase like "door knock", "glass shattering", "thunder clap", "phone ringing", "footsteps on wood") and "at"
+  (5 to 10 words copied EXACTLY from the sentence where it happens). A word alone is not a reason: "she held
+  her breath" is not breathing, "a knock-out dress" is not a knock. No effect is better than a wrong one.
 {rules}{wishes}
 Scenes:
 {scenes}
@@ -2801,9 +2901,11 @@ Reply with ONLY a JSON object, no markdown fences:
 {{"scenes": [{{"scene": 1, "ambience": "...", "effects": [{{"sound": "...", "at": "..."}}]}}]}}"""
 
 SOUND_RULES = {
-    "explicit": ("This is an explicit adult story. For sex scenes pick a fitting bedroom ambience, and effects "
-                 "such as \"female moaning\", \"male moaning\", \"heavy breathing\", \"bed creaking\" or \"kissing\" "
-                 "placed at the matching moments."),
+    "explicit": ("This is an explicit adult story. Intimate sounds (\"kissing\", \"heavy breathing\", \"female "
+                 "moaning\", \"male moaning\", \"bed creaking\") belong ONLY at the moments the characters are "
+                 "actually kissing or having sex; never when the text only mentions breath, a sigh or a bed. "
+                 "Intimate scenes get their breathing and moaning added automatically, so leave those out and "
+                 "use effects only for other things that happen."),
     "mature": "Romance may use effects like \"kissing\" or \"breathing\"; keep anything sexual off the page.",
     "young-kids": "Keep every sound gentle and friendly; nothing frightening.",
     "kids": "Keep every sound friendly; nothing frightening.",
@@ -2817,8 +2919,22 @@ AMBIENCE_FALLBACK = {   # when no writer is available: a background from the sce
     "fire": (r"fireplace|hearth|campfire|embers", "crackling fireplace"),
     "city": (r"city|streets?|traffic|taxi|downtown|subway|sidewalks?", "city street traffic ambience"),
     "crowd": (r"caf[eé]|restaurant|bar|pub|party|diner|crowd", "restaurant crowd chatter ambience"),
-    "bedroom": (r"bed|bedroom|sheets", "quiet bedroom night ambience"),
 }
+
+# Backgrounds that are only noise (they make every story hiss): never used.
+NOISE_AMBIENCE = re.compile(r"\b(room ?tone|hum|humming|drone|white noise|pink noise|static|hiss|silence|"
+                            r"quiet|ambient|ambience only|air conditioning|ac unit|fridge|refrigerator|"
+                            r"electrical|fluorescent|ventilation|hvac)\b", re.I)
+# Sounds of bodies: they need an intimate moment (or real exertion) in the text around them, not just the word.
+BODY_SOUND = re.compile(r"\b(breath\w*|pant\w*|gasp\w*|moan\w*|groan\w*|sigh\w*|kiss\w*|bed creak\w*|"
+                        r"bed squeak\w*|creaking bed|sex\w*|orgasm\w*|slap\w*|whimper\w*|lovemaking|sheets)\b", re.I)
+INTIMATE = re.compile(GRAPHIC.pattern[:-3] + r"|kiss\w*|groan\w*|lips|tongue\w*|mouth on|her mouth|his mouth|moan\w*|"
+                      r"gasp\w*|pant\w*|arch\w*|hips|thigh\w*|undress\w*|unbutton\w*|skin against|inside (?:her|him)|"
+                      r"on top of|beneath (?:him|her)|climax\w*|shudder\w*|tremb\w*|bodies)\b", re.I)
+EXERTION = re.compile(r"\b(ran|run|running|sprint\w*|chas\w*|climb\w*|out of breath|breathless|breathing hard|"
+                      r"pant\w*|gasp\w*|exhaust\w*|fight\w*|struggl\w*|swim\w*)\b", re.I)
+SEX_MOMENT = re.compile(r"\b(moan\w*|groan\w*|cried out|cry out|climax\w*|orgasm\w*|thrust\w*|"
+                        r"gasp\w*|whimper\w*|shudder\w*|her name|his name)\b", re.I)
 
 
 def plan_sounds(cfg, story, level, redo=False):
@@ -2871,13 +2987,33 @@ def plan_sounds(cfg, story, level, redo=False):
                 if not isinstance(f_, dict) or not str(f_.get("sound") or "").strip():
                     continue
                 snd_name = str(f_["sound"]).strip()[:60]
-                at = fx_anchor(sc["narration"], snd_name, str(f_.get("at", "")))
+                if level == "explicit" and cfg.get("INTIMATE_SOUNDS", "on") == "on" and BODY_SOUND.search(snd_name) \
+                        and not re.search(r"\bkiss", snd_name, re.I):
+                    continue                                  # love scenes get their breathing and moans by themselves
+                at = fx_anchor(sc["narration"], snd_name, str(f_.get("at", "")), level)
                 if at is None or (snd_name.lower(), at) in used:          # nowhere it fits, or the same twice
                     log(f"Sound '{snd_name}' left out of scene {i + 1}: no matching moment in the text")
                     continue
                 used.add((snd_name.lower(), at))
                 fx.append({"sound": snd_name, "at": at})
-            sc["sound"] = {"ambience": str(item.get("ambience") or "none").strip()[:80], "effects": fx[:max_fx]}
+            amb = str(item.get("ambience") or "none").strip()[:80]
+            amb = "none" if NOISE_AMBIENCE.search(amb) else amb      # a hint: where it plays follows the text
+            sc["sound"] = {"ambience": amb, "effects": fx[:max_fx]}
+
+
+def ambience_fits(ambience, narration):
+    """The background only when the scene's own words put us somewhere with that sound; "none" otherwise.
+    Hums, room tone and "quiet" backgrounds are never used: they only add noise."""
+    a = (ambience or "").strip()
+    if not a or a.lower() == "none" or NOISE_AMBIENCE.search(a):
+        return "none"
+    text = (narration or "").lower()
+    for name_, (pat_, query_) in AMBIENCE_FALLBACK.items():  # a known kind of place: the text must name it
+        if re.search(r"\b(?:" + pat_ + r")\b", a.lower()):
+            return a if re.search(r"\b(?:" + pat_ + r")\b", text) else "none"
+    stems = {w[:5] for w in _words(a) if len(w) > 3}
+    hits = {w[:5] for w in re.findall(r"[a-z]+", text) if len(w) > 3} & stems
+    return a if hits else "none"
 
 
 def _norm_words(s):
@@ -2888,14 +3024,54 @@ SOUND_HINTS = {   # words in the text that show where a sound belongs, for commo
     "door": "door|doors|doorway|knock\\w*", "knock": "knock\\w*|door", "footsteps": "step\\w*|walk\\w*|footstep\\w*|stair\\w*",
     "phone": "phone|ring\\w*|buzz\\w*|vibrat\\w*|text\\w*|call\\w*", "glass": "glass\\w*|toast\\w*|wine|drink\\w*",
     "thunder": "thunder\\w*|storm\\w*|lightning", "car": "car|engine|drove|drive\\w*|tyres?|tires?",
-    "kiss": "kiss\\w*|lips", "breathing": "breath\\w*|pant\\w*|gasp\\w*", "bed": "bed|mattress|sheets",
+    "kiss": "kiss\\w*", "breathing": "pant\\w*|gasp\\w*|out of breath|breathless", "moan": "moan\\w*|groan\\w*",
     "gunshot": "shot|shoot\\w*|gun\\w*|fired", "dog": "dog|bark\\w*", "laugh": "laugh\\w*|giggl\\w*",
 }
 
 
-def fx_anchor(narration, sound, at):
-    """Where in the scene a sound effect belongs, as words copied from the text. The writer's own words are used
-    when they're really in the scene; otherwise the sentence that best matches the sound; None if nothing fits."""
+def sound_fits(sentences, k, sound, level):
+    """Does the sound make sense at sentence k? Body sounds need what they stand for: an intimate moment (kissing,
+    sex) in or around the sentence, or real exertion for breathing; the word "breath" alone is not enough."""
+    if not BODY_SOUND.search(sound or ""):
+        return True
+    near = " ".join(sentences[max(0, k - 1):k + 2])
+    if re.search(r"\bkiss", sound, re.I):
+        return bool(re.search(r"\bkiss\w*", near, re.I))
+    if re.search(r"\b(breath|pant|gasp)", sound, re.I) and not re.search(r"\b(moan|sex|orgasm|bed)", sound, re.I):
+        if EXERTION.search(near):
+            return True
+    if level != "explicit":
+        return False
+    return len(INTIMATE.findall(near)) >= 2
+
+
+def _sentence_index(sentences, words):
+    w = " " + " ".join(_norm_words(words)) + " "
+    for k, s_ in enumerate(sentences):
+        if w.strip() and w in " " + " ".join(_norm_words(s_)) + " ":
+            return k
+    return None
+
+
+def fx_anchor(narration, sound, at, level="family"):
+    """Where in the scene a sound effect belongs, as words copied from the text: the writer's own words when they're
+    really in the scene and the sound makes sense there; otherwise the sentence that best matches the sound;
+    None if it fits nowhere (then it's left out: no effect is better than a wrong one)."""
+    found = _fx_anchor(narration, sound, at)
+    sents = split_sentences(narration)
+    if found is not None:
+        k = _sentence_index(sents, found)
+        if k is None or sound_fits(sents, k, sound, level):
+            return found
+    if BODY_SOUND.search(sound or ""):                     # the right moment for it, if there is one
+        for k, s_ in enumerate(sents):
+            if sound_fits(sents, k, sound, level) and (INTIMATE.search(s_) or EXERTION.search(s_)):
+                return " ".join(_norm_words(s_)[:7])
+        return None
+    return found
+
+
+def _fx_anchor(narration, sound, at):
     text_w = _norm_words(narration)
     joined = " " + " ".join(text_w) + " "
     aw = _norm_words(at)
@@ -2971,7 +3147,7 @@ def find_sound(cfg, query, kind, level):
     if not token:
         return None, None
     base = cfg.get("FREESOUND_URL", "https://freesound.org").rstrip("/")
-    dur = "duration:[25 TO 1200]" if kind == "ambience" else "duration:[0.3 TO 12]"
+    dur = {"ambience": "duration:[25 TO 1200]", "music": "duration:[60 TO 900] tag:music"}.get(kind, "duration:[0.3 TO 12]")
     tries = []
     for t_ in (" ".join(words), " ".join(words[:2]), " ".join(words[-2:]), words[-1] if words else ""):
         if t_ and t_ not in tries:
@@ -3020,8 +3196,9 @@ def find_sound(cfg, query, kind, level):
     return None, None
 
 
-def _anchor_time(seg, phrase):
-    """When, in this scene, the words `phrase` are spoken: the line that holds them, and how far into it."""
+def _anchor_info(seg, phrase):
+    """When, in this scene, the words `phrase` are spoken, and when the line holding them ends:
+    (time, line_end). Nothing found: early in the scene."""
     lines = seg["lines"]
     ph = _norm_words(phrase)
     if ph:
@@ -3033,21 +3210,192 @@ def _anchor_time(seg, phrase):
                     pos = text.find(probe)
                     if pos >= 0:
                         frac = pos / max(1, len(text))
-                        return ln["start"] + frac * (ln["end"] - ln["start"])
+                        return ln["start"] + frac * (ln["end"] - ln["start"]), ln["end"]
         best, best_n = None, 1                                  # most words in common
         for ln in lines:
             n_ = len(set(ph) & set(_norm_words(ln["text"])))
             if n_ > best_n:
                 best, best_n = ln, n_
         if best:
-            return best["start"] + 0.3
-    return (lines[0]["start"] if lines else seg["start"]) + 0.8      # no words given or found: early in the scene
+            return best["start"] + 0.3, best["end"]
+    if lines:
+        return lines[0]["start"] + 0.8, lines[0]["end"]
+    return seg["start"] + 0.8, seg["start"] + 3.0
+
+
+def _anchor_time(seg, phrase):
+    return _anchor_info(seg, phrase)[0]
+
+
+def _every_time(seg, phrase):
+    """Every moment in the scene where these words are spoken: [(time, line_end)] (for "every time" effects)."""
+    ph = _norm_words(phrase)
+    if not ph:
+        return []
+    probe = " " + " ".join(ph) + " "
+    out = []
+    for ln in seg["lines"]:
+        text = " " + " ".join(_norm_words(ln["text"])) + " "
+        pos = text.find(probe)
+        while pos >= 0:
+            out.append((ln["start"] + pos / max(1, len(text)) * (ln["end"] - ln["start"]), ln["end"]))
+            pos = text.find(probe, pos + 1)
+    return out
+
+
+# ── background sound that follows the story: where the scene is, for as long as it stays there ──
+AMBIENT_SETTINGS = [   # (name, kind, words in the narration that put us there, what to search for)
+    ("storm", "weather", r"thunder\w*|lightning|thunderstorms?|storm|storms|stormy", "thunderstorm rain"),
+    ("rain", "weather", r"rain|rains|raining|rained|rainy|drizzl\w*|downpour|raindrops?", "rain ambience"),
+    ("wind", "weather", r"the wind|a wind|cold wind|wind (?:howled|blew|whipped|picked up|rose|moaned|tugged)|windy|"
+                        r"gusts?|gusting|blizzard|snowstorm|gale", "strong wind ambience"),
+    ("ocean", "place", r"sea|ocean|waves|beach|shore|shoreline|surf|tide|seagulls?|harbou?r|pier|docks?|coast",
+     "ocean waves beach"),
+    ("river", "place", r"river|stream|creek|brook|waterfall", "river stream water"),
+    ("forest", "place", r"forest|woods|woodland|meadow|trail|clearing|grove", "forest birds ambience"),
+    ("night", "place", r"crickets?|porch at night|campsite|under the stars", "night crickets ambience"),
+    ("city", "place", r"city|street|streets|traffic|downtown|sidewalks?|avenue|crosswalk|taxi|cab|honk\w*",
+     "city street traffic ambience"),
+    ("park", "place", r"park|playground|garden|gardens", "park birds ambience"),
+    ("market", "place", r"market|bazaar|stalls?|fairground|carnival", "outdoor market crowd"),
+    ("farm", "place", r"farm|barn|pasture|cornfield|ranch", "farm countryside ambience"),
+    ("cafe", "indoor", r"caf[eé]|coffee shop|diner|bakery", "cafe ambience chatter"),
+    ("restaurant", "indoor", r"restaurant|bistro|dining room", "restaurant ambience"),
+    ("bar", "indoor", r"bar|pub|tavern|saloon|nightclub", "bar pub crowd ambience"),
+    ("party", "indoor", r"party|ballroom|banquet|gala", "party crowd chatter"),
+    ("office", "indoor", r"office|cubicles?|newsroom", "office ambience"),
+    ("hospital", "indoor", r"hospital|ward|clinic|nurses'? station|emergency room", "hospital ambience"),
+    ("car", "indoor", r"drove|driving|steering wheel|dashboard|passenger seat|back ?seat|highway|freeway",
+     "car interior driving"),
+    ("train", "indoor", r"train|subway|carriage|railway|tram", "train interior ambience"),
+    ("plane", "indoor", r"plane|airplane|aeroplane|flight|cockpit|airport", "airplane cabin ambience"),
+    ("fire", "indoor", r"fireplace|hearth|campfire|bonfire|embers", "crackling fireplace"),
+    ("kitchen", "indoor", r"stove|sizzl\w*|frying pan|simmer\w*|pots and pans", "kitchen cooking ambience"),
+    ("crowd", "indoor", r"crowd|stadium|arena|audience|concert", "crowd ambience"),
+    ("school", "indoor", r"classroom|school|cafeteria|lecture hall", "school hallway ambience"),
+    ("church", "indoor", r"church|cathedral|chapel", "church interior ambience"),
+]
+# a word used as a picture of something else ("waves of relief", "a storm of questions", "a train of thought")
+_SETTING_RE = {n: re.compile(r"\b(?:" + pat + r")\b(?!\s+(?:of|in her|in his)\b)", re.I)
+               for n, _k, pat, _q in AMBIENT_SETTINGS}
+_SETTING = {n: (k, q) for n, k, _p, q in AMBIENT_SETTINGS}
+QUIET_PLACE = re.compile(r"\b(?:(?:went|walked|stepped|came|headed|got|ran|hurried|slipped|stumbled|moved)\s+"
+                         r"(?:back\s+)?(?:inside|indoors|in(?:to)?\s+(?:the|her|his|their|my)\s+(?:house|home|"
+                         r"apartment|flat|bedroom|room|cabin|building|hallway))|closed the door behind|back home|"
+                         r"bedroom|living room|kitchen|bathroom|apartment|study)\b", re.I)
+# a busy place described as quiet ("the street was quiet", "the empty bar") has no crowd or traffic to hear
+QUIET_WORDS = re.compile(r"\b(quiet|silent|silence|still|empty|deserted|hushed|closed)\b", re.I)
+BUSY = {"city", "crowd", "party", "market", "bar", "cafe", "restaurant", "school", "office", "hospital"}
+WEATHER_END = re.compile(r"\b(?:(?:rain|storm|wind|thunder)\s+(?:had\s+)?(?:stopped|eased|passed|cleared|let up|"
+                         r"died down|faded)|stopped raining|sun came out|clear skies?)\b", re.I)
+
+
+def _setting_of(sentence):
+    """(place, weather, gone indoors, weather over) for one sentence, from the narration only (not what's said)."""
+    bare = re.sub(r"“[^”]*”|\"[^\"]*\"", " ", sentence)
+    place = weather = None
+    for name, kind, _p, _q in AMBIENT_SETTINGS:
+        if _SETTING_RE[name].search(bare):
+            if kind == "weather":
+                weather = weather or name
+            else:
+                place = place or name
+    if place in BUSY and QUIET_WORDS.search(bare):
+        return None, weather, True, bool(WEATHER_END.search(bare))
+    return place, weather, bool(QUIET_PLACE.search(bare)), bool(WEATHER_END.search(bare))
+
+
+def ambience_plan(story, segs):
+    """Where each scene is, sentence by sentence, as background spans: a background starts where the text puts us
+    there and lasts as long as we stay (into the next scene too, without a break, when the story is still there),
+    and stops when we go somewhere else. Rain and wind sit on top, softer once we're indoors.
+    Returns {segment number: [{"name", "query", "k0", "k1", "cin", "cout", "gain"}]} (k = sentence numbers)."""
+    plans, state, order = {}, {"place": None, "weather": None}, []
+    for n, seg in enumerate(segs):
+        if seg["kind"] != "scene":
+            continue
+        sc = story["scenes"][seg["index"]]
+        snd = sc.get("sound") or {}
+        sents = split_sentences(sc.get("narration", ""))
+        amb = str(snd.get("ambience") or "").strip()
+        if snd.get("chosen"):                                  # you chose it: the whole scene, or nothing
+            spans = [] if amb.lower() in ("", "none", "auto") else \
+                [{"name": "chosen:" + amb.lower(), "query": amb, "k0": 0, "k1": max(1, len(sents)), "cin": False,
+                  "cout": False, "gain": 1.0}]
+            if spans and order and plans[order[-1]] and plans[order[-1]][-1]["name"] == spans[0]["name"]:
+                spans[0]["cin"] = True
+            state = {"place": spans[0]["name"] if spans else None, "weather": None}
+            plans[n] = spans
+            order.append(n)
+            continue
+        info = [_setting_of(x) for x in sents]
+        spans = []
+        indoors = [False] * len(sents)
+        for kind in ("place", "weather"):
+            got = lambda i: i[0] or ("quiet" if i[2] else None) if kind == "place" else i[1]
+            mentioned = {got(i) for i in info} - {None}
+            first = next((got(i) for i in info if got(i)), None)
+            cur = state[kind] if state[kind] in mentioned and (kind == "weather" or first == state[kind]) else None
+            start, cin = 0, cur is not None
+            for k, i in enumerate(info):
+                if kind == "weather" and i[3] and cur:
+                    spans.append({"name": cur, "k0": start, "k1": k, "cin": cin})
+                    cur = None
+                    continue
+                new = got(i)
+                if new and new != cur:
+                    if cur:
+                        spans.append({"name": cur, "k0": start, "k1": k, "cin": cin})
+                    cur, start, cin = new, k, False
+            if cur:
+                spans.append({"name": cur, "k0": start, "k1": len(sents), "cin": cin})
+            state[kind] = cur
+            if kind == "place":
+                for sp in spans:
+                    if sp["name"] == "quiet" or _SETTING.get(sp["name"], ("",))[0] == "indoor":
+                        for k in range(sp["k0"], sp["k1"]):
+                            indoors[k] = True
+        out = []
+        for sp in spans:
+            if sp["name"] == "quiet":
+                continue                                        # indoors and quiet: no background
+            kind, query = _SETTING[sp["name"]]
+            hint = amb if amb and amb.lower() not in ("none", "auto") and (
+                _SETTING_RE[sp["name"]].search(amb) or set(_words(amb)) & set(_words(query))) else ""
+            sp.update(query=hint or query, cout=False)
+            if kind == "weather":                               # rain heard from inside is softer
+                inside = sum(indoors[sp["k0"]:sp["k1"]]) > (sp["k1"] - sp["k0"]) / 2
+                sp["gain"] = 0.45 if inside else 1.0
+            else:
+                sp["gain"] = 1.0
+            out.append(sp)
+        plans[n] = out
+        order.append(n)
+    for a_, b_ in zip(order, order[1:]):                       # carries on into the next scene: no fade between
+        for sp in plans[a_]:
+            nxt = next((x for x in plans[b_] if x["name"] == sp["name"] and x["cin"]), None)
+            if nxt and sp["k1"] >= len(split_sentences(story["scenes"][segs[a_]["index"]].get("narration", ""))):
+                sp["cout"] = True
+        for x in plans[b_]:
+            prev = next((sp for sp in plans[a_] if sp["name"] == x["name"] and sp["cout"]), None)
+            if x["cin"] and not prev:
+                x["cin"] = False
+            elif prev:
+                x["query"] = prev["query"]                     # the same recording carries on
+                if abs(prev["gain"] - x["gain"]) > 0.01:        # louder or softer now: a gentle cross-fade
+                    x["cin"] = prev["cout"] = False
+    return plans
+
+
+CONTINUOUS_FX = re.compile(r"\b(ring\w*|engine|motor|siren|alarm|crowd|applause|clapping|footsteps|typing|rain|"
+                           r"wind|music|humming|buzz\w*|traffic|crackl\w*|breath\w*|moan\w*|static|running water|"
+                           r"shower|purr\w*|snor\w*|ticking|clock)\b", re.I)
 
 
 def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
     """The background track for the whole story: each scene's ambience (looped, faded) plus its effects
     at the moments they belong, and optional music. Returns (bed_wav or None, credits)."""
-    amb_gain = 10 ** ((-34 + 20 * math.log10(max(0.05, float(cfg["AMBIENCE_VOLUME"])))) / 20)
+    amb_gain = 10 ** ((-33 + 20 * math.log10(max(0.05, float(cfg["AMBIENCE_VOLUME"])))) / 20)
     credits, pieces, any_sound = [], [], False
     cache = {}
 
@@ -3061,6 +3409,8 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
         return cache[key]
 
     segs = timeline["segments"]
+    amb_plans = ambience_plan(story, segs) if with_sounds else {}
+    amb_pos = {}                                   # where each looping background is, so it carries on seamlessly
     for n_, seg in enumerate(segs):
         dur = seg["end"] - seg["start"]
         out = job / f"bed_{n_:03d}.wav"
@@ -3069,34 +3419,85 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
             pieces.append(out)
             continue
         sc = story["scenes"][seg["index"]]
-        plan = (sc.get("sound") or {}) if with_sounds else {}
-        inputs, chains, labels = ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=44100:cl=stereo"], [], ["[0:a]"]
-        amb, credit = find_sound(cfg, plan.get("ambience"), "ambience", level)
-        if not amb and str(plan.get("ambience") or "none").lower() != "none":   # nothing for that phrase: a simpler one
-            words_ = sc.get("narration", "").lower()
-            for name_, (pat_, query_) in AMBIENCE_FALLBACK.items():
-                if name_ == "bedroom" and level not in ("mature", "explicit"):
+        plan = dict(sc.get("sound") or {}) if with_sounds else {}
+        if plan:                                   # checked again here, so older stories get it right too
+            sents_ = split_sentences(sc.get("narration", ""))
+            keep = []
+            for fx in plan.get("effects") or []:
+                k_ = _sentence_index(sents_, fx.get("at", ""))
+                if k_ is None and BODY_SOUND.search(fx.get("sound", "")):
                     continue
-                if re.search(r"\b(?:" + pat_ + r")\b", words_) or set(_words(plan.get("ambience"))) & set(_words(query_)):
-                    amb, credit = find_sound(cfg, query_, "ambience", level)
-                    if amb:
-                        break
+                if k_ is None or sound_fits(sents_, k_, fx.get("sound", ""), level):
+                    keep.append(fx)
+            plan["effects"] = keep
+        inputs, chains, labels = ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=44100:cl=stereo"], [], ["[0:a]"]
         k = 1
-        if amb:
+        sents_all = split_sentences(sc.get("narration", ""))
+
+        def sentence_time(k_):
+            if k_ <= 0:
+                return seg["start"]
+            if k_ >= len(sents_all):
+                return seg["end"]
+            return _anchor_time(seg, " ".join(_norm_words(sents_all[k_])[:6]))
+        amb_names = []
+        for sp in (amb_plans.get(n_) or []) if with_sounds else []:
+            amb, credit = find_sound(cfg, sp["query"], "ambience", level)
+            if not amb and sp["query"] != _SETTING.get(sp["name"], ("", sp["query"]))[1]:
+                amb, credit = find_sound(cfg, _SETTING[sp["name"]][1], "ambience", level)   # a simpler search
+            if not amb:
+                continue
+            a = max(0.0, sentence_time(sp["k0"]) - seg["start"] - (0 if sp["cin"] else 0.5))
+            b = min(dur, sentence_time(sp["k1"]) - seg["start"] + (0 if sp["cout"] else 1.5))
+            if b - a < 6 and not (sp["cin"] or sp["cout"]):
+                continue                                         # too short to be worth a background
             credits.append(credit)
-            fade = min(2.0, dur / 4)
-            inputs += ["-stream_loop", "-1", "-i", str(leveled(amb, -30))]
-            chains.append(f"[{k}:a]atrim=0:{dur:.3f},asetpts=N/SR/TB,volume={amb_gain / 10 ** (-30 / 20):.4f},"
-                          f"afade=t=in:d={fade:.2f},afade=t=out:st={max(0, dur - fade):.2f}:d={fade:.2f}[a{k}]")
+            amb_names.append(f"{sp['query']} {a:.0f}–{b:.0f}s")
+            fi = 0.05 if sp["cin"] else min(2.0, (b - a) / 4)
+            fo = 0.05 if sp["cout"] else min(2.5, (b - a) / 4)
+            src = leveled(amb, -30)
+            off = amb_pos.get(sp["name"], 0.0) % max(1.0, duration(src) - 1) if sp["cin"] else 0.0
+            amb_pos[sp["name"]] = off + (b - a)
+            inputs += ["-stream_loop", "-1", "-ss", f"{off:.2f}", "-i", str(src)]
+            chains.append(f"[{k}:a]atrim=0:{b - a:.3f},asetpts=N/SR/TB,"
+                          f"volume={sp['gain'] * amb_gain / 10 ** (-30 / 20):.4f},"
+                          f"afade=t=in:d={fi:.2f},afade=t=out:st={max(0, b - a - fo):.2f}:d={fo:.2f},"
+                          f"adelay={int(a * 1000)}|{int(a * 1000)}[a{k}]")
             labels.append(f"[a{k}]")
             k += 1
-        timed = sorted(((_anchor_time(seg, fx.get("at", "")), fx) for fx in plan.get("effects") or []),
-                       key=lambda p_: p_[0])
+        layers, auto_fx = [], []
+        if with_sounds and level == "explicit" and cfg.get("INTIMATE_SOUNDS", "on") == "on":
+            layers, auto_fx = intimate_sounds(seg, sc.get("narration", ""))
+        for t0, t1, query in layers:               # soft breathing under the love scene, and only there
+            f_, credit = find_sound(cfg, query, "effect", level)
+            if not f_:
+                continue
+            credits.append(credit)
+            a, b = max(0.0, t0 - seg["start"]), min(dur, t1 - seg["start"])
+            if b - a < 4:
+                continue
+            fd = min(3.0, (b - a) / 4)
+            inputs += ["-stream_loop", "-1", "-i", str(leveled(f_, -30))]
+            chains.append(f"[{k}:a]atrim=0:{b - a:.2f},asetpts=N/SR/TB,volume={0.45 * float(cfg['EFFECTS_VOLUME']):.3f},"
+                          f"afade=t=in:d={fd:.2f},afade=t=out:st={b - a - fd:.2f}:d={fd:.2f},"
+                          f"adelay={int(a * 1000)}|{int(a * 1000)}[a{k}]")
+            labels.append(f"[a{k}]")
+            k += 1
+        planned = []
+        for fx in plan.get("effects") or []:        # once, where it belongs, unless you asked for every time
+            times = _every_time(seg, fx.get("at", "")) if fx.get("every") else []
+            planned += [(t, dict(fx, _end=e)) for t, e in (times or [_anchor_info(seg, fx.get("at", ""))])]
+        planned = [(t, fx) for t, fx in planned if not (BODY_SOUND.search(fx.get("sound", "")) and         # no doubles
+                   not re.search(r"\bkiss", fx.get("sound", ""), re.I) and any(a <= t <= b for a, b, _ in layers))]
+        timed = sorted(planned + auto_fx, key=lambda p_: p_[0])
+        log(f"Sound, scene {seg['index'] + 1}: background {', '.join(amb_names) or 'none'}; "
+            + (", ".join(f"{fx.get('sound')} at {t - seg['start']:.0f}s" for t, fx in timed) or "no effects")
+            + "".join(f"; {q} {a - seg['start']:.0f}–{b - seg['start']:.0f}s" for a, b, q in layers))
         last_at = -99.0
         for at, fx in timed:
             if at is None:
                 continue
-            at = max(at, last_at + 1.5)                          # effects never pile on top of each other
+            at = max(at, last_at + (0.8 if fx.get("every") else 1.5))     # effects never pile on top of each other
             if at > seg["end"] - 0.5:
                 continue
             f_, credit = find_sound(cfg, fx.get("sound"), "effect", level)
@@ -3105,8 +3506,14 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
             last_at = at
             credits.append(credit)
             delay = max(0, int((at - seg["start"]) * 1000))
-            fx_gain = float(cfg["EFFECTS_VOLUME"])
-            room = max(1.0, min(8.0, seg["end"] - at))           # short, and faded out before the scene ends
+            body = BODY_SOUND.search(fx.get("sound", ""))
+            # women's moaning recordings are breathier and softer than men's: they get more lift to sound as present
+            fx_gain = float(cfg["EFFECTS_VOLUME"]) * ((1.15 if re.search(r"female|woman", fx.get("sound", ""), re.I)
+                                                      else 0.7) if body else 1.0)
+            # it belongs to its moment: a knock is a knock; a ringing phone lasts to the end of that line, no further
+            line_end = fx.get("_end") or (at + 3)
+            cap = 6.0 if CONTINUOUS_FX.search(fx.get("sound", "")) else 2.5
+            room = max(1.0, min(cap, max(line_end + 0.4 - at, 1.0), seg["end"] - at))
             inputs += ["-i", str(leveled(f_, -26))]
             chains.append(f"[{k}:a]atrim=0:{room:.2f},afade=t=out:st={max(0.0, room - 0.6):.2f}:d=0.6,"
                           f"volume={fx_gain:.3f},adelay={delay}|{delay}[a{k}]")
@@ -3126,7 +3533,12 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
     lst.write_text("".join(f"file '{p_}'\n" for p_ in pieces))
     bed = job / "bed.wav"
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-ar", "44100", "-ac", "2", str(bed)])
-    if music:
+    if music and cfg.get("MUSIC_MODE", "under") == "moments":
+        mixed = job / "bed_music.wav"
+        mix_music_moments(cfg, bed, music, timeline, mixed, leveled(music, -26))
+        bed = mixed
+        credits.append(MUSIC_CREDITS.get(str(music), f"Music: {music.name}"))
+    elif music:
         total = timeline["total"]
         mixed = job / "bed_music.wav"
         run(["ffmpeg", "-y", "-v", "error", "-i", str(bed), "-stream_loop", "-1", "-i", str(leveled(music, -32)),
@@ -3135,9 +3547,91 @@ def build_bed(cfg, story, timeline, job, level, music=None, with_sounds=True):
                                 f"[0:a][m]amix=inputs=2:duration=first:normalize=0[o]",
              "-map", "[o]", "-ar", "44100", "-ac", "2", str(mixed)])
         bed = mixed
-        credits.append(f"Music: {music.name}")
+        credits.append(MUSIC_CREDITS.get(str(music), f"Music: {music.name}"))
     seen = []
     return bed, [c for c in credits if c and not (c in seen or seen.append(c))]
+
+
+def intimate_sounds(seg, narration):
+    """For an explicit story's love scenes: where they are (a run of at least three intimate sentences, not one
+    kiss or a mention of breath), a soft breathing layer under each one, and moans at the moments the text
+    describes (moaning, gasping, crying out, the climax), a woman's or a man's by who the sentence is about.
+    Returns ([(start, end, sound)], [(time, effect)])."""
+    sents = split_sentences(narration)
+    hot = [k for k, s_ in enumerate(sents) if INTIMATE.search(s_)
+           and len(INTIMATE.findall(" ".join(sents[max(0, k - 1):k + 2]))) >= 3]
+    runs, cur = [], []
+    for k in hot:
+        if cur and k - cur[-1] > 2:
+            runs.append(cur)
+            cur = []
+        cur.append(k)
+    if cur:
+        runs.append(cur)
+    layers, fx = [], []
+    at = lambda k: _anchor_time(seg, " ".join(_norm_words(sents[k])[:6]))
+    for r in runs:
+        if len(r) < 3:
+            continue
+        t0 = at(r[0])
+        t1 = at(r[-1] + 1) if r[-1] + 1 < len(sents) else seg["end"]
+        layers.append((t0, max(t1, at(r[-1]) + 4), "heavy breathing"))
+        moments = [k for k in range(r[0], r[-1] + 1) if SEX_MOMENT.search(sents[k])] or [r[-1]]
+        last = -99.0
+        for k in moments[:6]:
+            t = at(k)
+            if t - last < 5:
+                continue
+            last = t
+            m_ = re.search(r"\b(she|her|he|him|his)\b", sents[k].lower())     # who the sentence is about first
+            who = "male moaning" if m_ and m_.group(1) in ("he", "him", "his") else "female moaning"
+            fx.append((t, {"sound": who, "at": " ".join(_norm_words(sents[k])[:6])}))
+    return layers, fx
+
+
+MUSIC_MOODS = [   # words in the genre or level → words in music file names that fit
+    (r"romanc|love|explicit|mature|sensual|steamy", ["romantic", "love", "sensual", "tender", "piano", "soft"]),
+    (r"horror|thrill|suspense|dark|crime|noir|ghost", ["dark", "tense", "suspense", "eerie", "noir", "mystery"]),
+    (r"myster|detective", ["mystery", "noir", "suspense", "jazz"]),
+    (r"kid|child|young|bedtime|fairy|whims", ["playful", "whimsical", "happy", "lullaby", "gentle", "kids"]),
+    (r"adventur|fantasy|epic|quest|action|hero", ["adventure", "epic", "heroic", "fantasy", "cinematic"]),
+    (r"comed|funny|humou?r|silly", ["funny", "comedy", "happy", "playful", "light"]),
+    (r"drama|sad|grief|loss|emotion", ["sad", "emotional", "piano", "tender", "melancholy"]),
+    (r"sci|space|future|cyber", ["space", "electronic", "ambient", "synth"]),
+    (r"heartwarm|cozy|cosy|family|friend", ["warm", "gentle", "acoustic", "happy", "hopeful"]),
+]
+NEUTRAL_MUSIC = ["calm", "gentle", "soft", "piano", "acoustic", "cinematic", "warm"]
+
+
+def mix_music_moments(cfg, bed, music, timeline, out, track):
+    """Music where an audiobook has it: under the title and into the first words, at each new chapter, and at
+    the end. Not under the whole story. Each piece fades in and out, and dips under the voice."""
+    total = timeline["total"]
+    segs = timeline["segments"]
+    wins = []
+    title = next((s_ for s_ in segs if s_["kind"] == "title"), None)
+    if title:
+        wins.append((0.0, min(total, title["end"] + 6), 0.5, 5.0))      # (start, length, fade in, fade out)
+    first_scene = next((s_ for s_ in segs if s_["kind"] == "scene"), None)
+    for s_ in segs:
+        if s_["kind"] == "scene" and s_.get("chapter_start") and s_ is not first_scene:
+            wins.append((max(0.0, s_["start"] - 2.5), 9.0, 1.5, 5.0))
+    if total > 30:
+        wins.append((max(0.0, total - 15), 15.0, 4.0, 5.0))
+    tlen = max(1.0, duration(track))
+    inputs, chains, labels = ["-i", str(bed)], [], ["[0:a]"]
+    vol = float(cfg["MUSIC_VOLUME"]) / 0.18
+    for n, (start, length, fi, fo) in enumerate(wins):
+        off = 0.0 if n == 0 else (n * 41.0) % max(1.0, tlen - length)    # a different part of the track each time
+        inputs += ["-stream_loop", "-1", "-ss", f"{off:.2f}", "-i", str(track)]
+        d = int(start * 1000)
+        chains.append(f"[{n + 1}:a]atrim=0:{length:.2f},asetpts=N/SR/TB,volume={vol:.3f},"
+                      f"afade=t=in:d={fi:.2f},afade=t=out:st={max(0.0, length - fo):.2f}:d={fo:.2f},"
+                      f"adelay={d}|{d}[m{n}]")
+        labels.append(f"[m{n}]")
+    graph = ";".join(chains) + ";" + "".join(labels) + f"amix=inputs={len(labels)}:duration=first:normalize=0[o]"
+    run(["ffmpeg", "-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", "[o]",
+         "-ar", "44100", "-ac", "2", str(out)])
 
 
 def mix_and_master(voice, bed, out_wav, job):
@@ -3157,7 +3651,7 @@ def mix_and_master(voice, bed, out_wav, job):
     if bed:
         graph = ("[0:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[v][key];"
                  "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[b];"
-                 "[b][key]sidechaincompress=threshold=0.03:ratio=3:attack=30:release=500:knee=4[duck];"
+                 "[b][key]sidechaincompress=threshold=0.025:ratio=4:attack=25:release=500:knee=4[duck];"
                  "[v][duck]amix=inputs=2:duration=first:normalize=0[o]")
         run(["ffmpeg", "-y", "-v", "error", "-i", str(voice), "-i", str(bed), "-filter_complex", graph,
              "-map", "[o]", "-ar", "44100", str(pre)])
@@ -3189,7 +3683,7 @@ def produce_audio(cfg, story, job, out_dir, level, genre, music_choice, seed, sa
     (stems / "timeline.json").write_text(json.dumps(timeline))
     (stems / "voices.json").write_text(json.dumps({"engine": engine, "voices": voices}))
     bed, credits = None, []
-    music = pick_music(cfg, genre or "", music_choice, seed)
+    music = pick_music(cfg, genre or "", music_choice, seed, level)
     if cfg["SOUNDSCAPES"].lower() == "on":
         plan_sounds(cfg, story, level, redo=redesign)
         report("narration", 0.98, "Finding the sounds")
@@ -3232,22 +3726,64 @@ def slice_segments(final, timeline, job):
     return out
 
 
-def pick_music(cfg, genre, choice, seed):
+def pick_music(cfg, genre, choice, seed, level=""):
     """choice: None (auto) | 'off' | part of a file name."""
     if cfg["MUSIC"] != "on" or (choice or "").lower() == "off":
         return None
     folder = Path(os.path.expanduser(cfg["MUSIC_DIR"]))
     tracks = sorted(p for p in folder.glob("**/*") if p.suffix.lower() in AUDIO_EXTS) if folder.exists() else []
     if not tracks:
-        return None
+        return free_music(cfg, genre, level, [], random.Random(seed))
     if choice:
         hits = [t for t in tracks if choice.lower() in t.stem.lower()]
         if hits:
             return hits[0]
         log(f"No music file matches '{choice}'; picking one instead.")
-    words = [w for w in re.findall(r"[a-z]+", genre.lower()) if len(w) > 2]
-    hits = [t for t in tracks if any(w in t.stem.lower() for w in words)]
-    return random.Random(seed).choice(hits or tracks)
+    rnd = random.Random(seed)
+    groups = [ws for pat, ws in MUSIC_MOODS if re.search(pat, (level or "").lower())]          # the level's mood,
+    groups += [ws for pat, ws in MUSIC_MOODS if re.search(pat, (genre or "").lower())]         # the genre's moods,
+    groups.append([w for w in re.findall(r"[a-z]+", (genre or "").lower()) if len(w) > 3])     # its words,
+    groups.append(NEUTRAL_MUSIC)                                                               # or something calm
+    for want in groups:
+        hits = [t for t in tracks if any(w in t.stem.lower() for w in want)]
+        if hits:
+            return rnd.choice(hits)
+    return free_music(cfg, genre, level, tracks, rnd)
+
+
+FREE_MUSIC = [   # the story's level or genre → music to look for on Freesound (free, with credits)
+    (r"romanc|love|explicit|mature|sensual|steamy", "romantic piano music"),
+    (r"horror|thrill|suspense|dark|crime|noir|ghost", "dark suspense music"),
+    (r"myster|detective", "mystery music"),
+    (r"kid|child|young|bedtime|fairy|whims", "playful whimsical music"),
+    (r"adventur|fantasy|epic|quest|action|hero", "epic adventure music"),
+    (r"comed|funny|humou?r|silly", "funny quirky music"),
+    (r"drama|sad|grief|loss|emotion", "sad piano music"),
+    (r"sci|space|future|cyber", "ambient space music"),
+    (r"heartwarm|cozy|cosy|family|friend", "warm acoustic music"),
+]
+MUSIC_CREDITS = {}
+
+
+def free_music(cfg, genre, level, tracks, rnd):
+    """No track in your music folder fits: free music that matches the mood, from Freesound (downloaded once and
+    kept). If that can't be had either, a track from your folder, so the story still has music."""
+    for key in ((level or "").lower(), (genre or "").lower(), ""):
+        query = next((q for pat, q in FREE_MUSIC if key and re.search(pat, key)), None if key else "calm piano music")
+        if not query:
+            continue
+        f, credit = find_sound(cfg, query, "music", level)
+        if f:
+            MUSIC_CREDITS[str(f)] = f"Music: {credit}"
+            log(f"Music: {query} from Freesound ({credit}).")
+            return Path(f)
+        break
+    if tracks:
+        log("No music in your music folder matches this story's mood, and none could be found online, so one of "
+            "yours is used. Name tracks by mood (romantic, tense, playful, epic, sad, calm…) to have them matched.")
+        return rnd.choice(tracks)
+    log("No music: your music folder is empty and no free music could be found (needs FREESOUND_API_KEY).")
+    return None
 
 
 
@@ -4002,6 +4538,20 @@ def set_cast(cfg, run_id, payload):
     return {"ok": True, "cast": story["cast"]}
 
 
+def clean_sound_plan(plan, old=None):
+    """A scene's sounds as you set them. Background: blank = automatic (it follows where the scene is), "none" =
+    silence, anything else = that sound for the whole scene. Effects play once at their words, or at every time
+    those words are read if "every" is ticked."""
+    fx = [{"sound": str(f_.get("sound", "")).strip()[:60], "at": str(f_.get("at", "")).strip()[:120],
+           **({"every": True} if f_.get("every") else {})}
+          for f_ in (plan.get("effects") or []) if isinstance(f_, dict) and str(f_.get("sound", "")).strip()][:8]
+    amb = str(plan.get("ambience") or "").strip()[:80]
+    if not amb or amb.lower() == "auto":                     # automatic: keep the designer's idea as a hint
+        hint = (old or {}).get("ambience") if not (old or {}).get("chosen") else "auto"
+        return {"ambience": hint or "auto", "effects": fx}
+    return {"ambience": amb, "chosen": True, "effects": fx}
+
+
 def set_sounds(cfg, run_id, payload):
     """payload: {"wishes": "rain, thunder", "scenes": {"0": {"ambience": "...", "effects": [{"sound", "at"}]}}}"""
     folder, story, result = load_story(cfg, run_id)
@@ -4011,10 +4561,7 @@ def set_sounds(cfg, run_id, payload):
         i = int(k)
         if not (0 <= i < len(story["scenes"])) or not isinstance(plan, dict):
             continue
-        fx = [{"sound": str(f_.get("sound", "")).strip()[:60], "at": str(f_.get("at", "")).strip()[:120]}
-              for f_ in (plan.get("effects") or []) if isinstance(f_, dict) and str(f_.get("sound", "")).strip()][:6]
-        story["scenes"][i]["sound"] = {"ambience": str(plan.get("ambience") or "none").strip()[:80] or "none",
-                                       "effects": fx}
+        story["scenes"][i]["sound"] = clean_sound_plan(plan, story["scenes"][i].get("sound"))
     if result.get("level") == "explicit":
         check_adult_only(json.dumps(payload, ensure_ascii=False))
     (folder / "story.json").write_text(json.dumps(story, indent=2))
@@ -4104,6 +4651,81 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
     if then_remaster and (result.get("audio_file") or result.get("video_file")):
         return remaster_story(cfg, run_id)
     return {"ok": True, "rewritten": len(idxs), "audio_outdated": bool(result.get("audio_outdated"))}
+
+
+def check_writing(cfg, run_id):
+    """The sentence checker over a finished story, by rule only (instant, no AI): how many problems, where, and a few
+    examples."""
+    folder, story, result = load_story(cfg, run_id)
+    names = [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)]
+    total, scenes_with, examples = 0, 0, []
+    for i, sc in enumerate(story.get("scenes") or []):
+        text = sc.get("narration", "")
+        found = sentence_issues(tidy_sentences(text), names)
+        tidy = tidy_sentences(text) != text
+        n = len(found) + (1 if tidy else 0)
+        total += n
+        scenes_with += 1 if n else 0
+        for sent, prob in found[:2]:
+            if len(examples) < 6:
+                examples.append({"scene": i + 1, "sentence": sent[:220], "problem": prob})
+    return {"run_id": run_id, "title": story.get("title", ""), "level": result.get("level") or story.get("level"),
+            "scenes": len(story.get("scenes") or []), "problems": total, "scenes_with": scenes_with,
+            "examples": examples, "has_audio": bool(result.get("audio_file") or result.get("video_file"))}
+
+
+def cleanup_story(cfg, run_id, then_remaster=True, which=(1, 1)):
+    """Run a finished story through the proofreader and the sentence checker, scene by scene, and save it. Nothing
+    else changes: the events, names, heat and the sound plan stay. Then the audio is remade (only changed lines are
+    recorded again) or marked as out of date. which = (this story's number, how many stories in this run)."""
+    folder, story, result = load_story(cfg, run_id)
+    level = result.get("level") or story.get("level") or "family"
+    if level == "explicit":
+        if cfg["ADULT_CONTENT"].lower() != "on":
+            raise ValueError("This is an Explicit story, and Explicit is turned off for this account.")
+        adult_config(cfg)
+    cfg["PROOFREAD"] = "on"
+    system = EXPLICIT_SYSTEM if level == "explicit" else None
+    names = [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)]
+    scenes = story.get("scenes") or []
+    before = after = 0
+    changed = []
+    label = f"Story {which[0]} of {which[1]}: " if which[1] > 1 else ""
+    for i, sc in enumerate(scenes):
+        old = sc.get("narration", "")
+        found = sentence_issues(old, names)
+        before += len(found)
+        report("writing", i / max(1, len(scenes)) * (0.8 if then_remaster else 1),
+               f"{label}Cleaning up \"{story.get('title', '')}\": scene {i + 1} of {len(scenes)}")
+        text = proofread(cfg, old, system)
+        text = fix_sentences(cfg, text, system, names)
+        if level == "explicit":
+            try:
+                text = adult_guard(cfg, text, system)
+            except SceneRedo:
+                text = old                                  # keep it as it was rather than lose the scene
+        left = sentence_issues(text, names)
+        if len(left) > len(found) and len(found) > 0:      # never leave it worse than it was
+            text, left = old, found
+        after += len(left)
+        if text.strip() != old.strip():
+            sc["narration"] = text
+            sc["proofread"] = True
+            changed.append(i)
+            keep = sc.get("sound")
+            save_story_text(folder, story, result, [i])      # saved after every scene, so nothing is lost
+            if keep:
+                sc["sound"] = keep                          # small text fixes keep the sounds you had
+                (folder / "story.json").write_text(json.dumps(story, indent=2))
+    log(f"Cleaned up \"{story.get('title', '')}\": {len(changed)} of {len(scenes)} scenes changed; sentence problems "
+        f"{before} → {after}.")
+    out = {"ok": True, "run_id": run_id, "title": story.get("title", ""), "scenes_changed": len(changed),
+           "scenes": len(scenes), "problems_before": before, "problems_after": after}
+    if changed and then_remaster and (result.get("audio_file") or result.get("video_file")):
+        report("narration", 0.8, f"{label}Recording the changed lines of \"{story.get('title', '')}\"")
+        remaster_story(cfg, run_id)
+        out["remade"] = True
+    return out
 
 
 def remaster_story(cfg, run_id, revoice=False, redesign=False):
@@ -4541,6 +5163,10 @@ def main():
     ap.add_argument("--instructions", help=argparse.SUPPRESS)
     ap.add_argument("--no-remake", action="store_true", help="with --rewrite: don't remake the audio afterwards")
     ap.add_argument("--remaster", metavar="STORY", help="make a finished story's audio (and video sound) again")
+    ap.add_argument("--check-writing", metavar="STORY[,STORY…]",
+                    help="count the sentence and spelling problems in finished stories (instant, no AI)")
+    ap.add_argument("--cleanup", metavar="STORY[,STORY…]",
+                    help="proofread and fix the sentences of finished stories, then remake their audio")
     ap.add_argument("--revoice", action="store_true", help="with --remaster: choose the character voices again")
     ap.add_argument("--redesign", action="store_true", help="with --remaster: choose the sounds again")
     ap.add_argument("--job-id", help=argparse.SUPPRESS)
@@ -4581,7 +5207,8 @@ def main():
         return
     if args.voices_list:
         print(json.dumps({"ok": True, "engine": pick_tts(cfg), "kokoro": kokoro_ok(),
-                          "voices": [dict(zip(("id", "name", "gender", "accent", "note"), v)) for v in KOKORO_CATALOGUE],
+                          "voices": [dict(zip(("id", "name", "gender", "accent", "note"), v), group=voice_group(v))
+                                     for v in KOKORO_CATALOGUE],
                           "narrator": cfg["KOKORO_VOICE"]}))
         return
     if args.voice_sample:
@@ -4605,6 +5232,54 @@ def main():
             print(json.dumps(edit_story(cfg, args.edit, payload)))
         except ValueError as e:
             print(json.dumps({"ok": False, "error": str(e)}))
+        return
+    if args.check_writing:
+        out = []
+        for x in [x for x in args.check_writing.split(",") if x.strip()]:
+            try:
+                out.append(check_writing(cfg, x))
+            except Exception as e:
+                out.append({"run_id": x, "error": str(e)[:200]})
+        print(json.dumps({"ok": True, "stories": out}))
+        return
+    if args.cleanup:
+        ids = [x for x in args.cleanup.split(",") if x.strip()]
+        try:
+            for x in ids:
+                story_folder(cfg, x)
+        except ValueError as e:
+            print(json.dumps({"ok": False, "error": str(e)}))
+            return
+        job_id = args.job_id or hashlib.sha1(f"cleanup|{args.cleanup}|{time.time()}".encode()).hexdigest()[:12]
+        if args.background and not args.child:
+            logf = jobs_dir(cfg) / f"{job_id}.log"
+            argv = [a for a in sys.argv[1:] if a != "--background"]
+            cmd = [sys.executable, str(Path(__file__).resolve()), *argv, "--job-id", job_id, "--child"]
+            with open(logf, "a") as lf:
+                subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
+                                 start_new_session=True, close_fds=True)
+            write_status(cfg, job_id, state="queued", kind="cleanup", story=ids[0], stories=ids)
+            print(json.dumps({"ok": True, "queued": True, "job_id": job_id}))
+            return
+        progress_start(cfg, job_id, jobs_dir(cfg) / job_id, "audio", False)
+        _PROG["status"].update(kind="cleanup", story=ids[0], stories=ids)
+        results, failed = [], []
+        for n_, x in enumerate(ids):
+            try:
+                results.append(cleanup_story(dict(cfg), x, not args.no_remake, (n_ + 1, len(ids))))
+            except Exception as e:                       # one story's problem doesn't stop the others
+                log(f"Couldn't clean up {x}: {str(e)[:200]}")
+                failed.append({"run_id": x, "error": str(e)[:200]})
+        summary = {"stories": len(results), "scenes_changed": sum(r["scenes_changed"] for r in results),
+                   "problems_before": sum(r["problems_before"] for r in results),
+                   "problems_after": sum(r["problems_after"] for r in results), "failed": failed}
+        if not results:
+            write_status(cfg, job_id, state="failed", error=failed[0]["error"] if failed else "Nothing to clean up",
+                         kind="cleanup", story=ids[0])
+            print(json.dumps({"ok": False, "error": failed[0]["error"] if failed else "Nothing to clean up"}))
+            raise SystemExit(1)
+        write_status(cfg, job_id, state="done", kind="cleanup", story=ids[0], result={"run_id": ids[0], **summary})
+        print(json.dumps({"ok": True, **summary, "results": results}))
         return
     if args.rewrite or args.remaster:
         run_id = args.rewrite or args.remaster

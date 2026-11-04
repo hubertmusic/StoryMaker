@@ -23,11 +23,12 @@
     <div class="home-grid">
       <form class="panel" id="importForm" autocomplete="off">
         <h2 class="panel-h">Bring in a book</h2>
-        <fieldset class="choice three" id="srcKind">
+        <fieldset class="choice four" id="srcKind">
           <legend>Where is it?</legend>
           <label><input type="radio" name="src" value="sm" checked> StoryMaker</label>
           <label><input type="radio" name="src" value="file"> A file</label>
           <label><input type="radio" name="src" value="paste"> Paste</label>
+          <label><input type="radio" name="src" value="free"> Free book</label>
         </fieldset>
 
         <div id="srcSm" class="field">
@@ -47,6 +48,22 @@
           <textarea id="pasteText" rows="7" placeholder="Characters&#10;Mira: a woman&#10;Jake: a man&#10;&#10;Chapter 1&#10;Paste the story here. Lines like “Chapter 2” start new chapters; * * * starts a new scene."></textarea>
           <p class="hint">Start with a <strong>Characters</strong> list (name, then woman, man, girl, boy, older woman, older man or creature) and those genders are locked.</p>
         </div>
+
+        <div id="srcFree" class="field" hidden>
+          <label for="bookQuery">Which book?</label>
+          <div class="search-row">
+            <input id="bookQuery" type="search" maxlength="200" placeholder="Pride and Prejudice, or “the one about a man who becomes a giant insect”">
+            <button type="button" class="small-btn" id="bookSearch">Search</button>
+          </div>
+          <p class="hint">Free books from Project Gutenberg: classics that are out of copyright in the US (mostly published before 1930). Describe a book and the AI works out which one you mean. For a newer book you own, bring in your own copy as a file.</p>
+          <div id="bookResults" class="book-results" role="radiogroup" aria-label="Books found"></div>
+        </div>
+
+        <fieldset class="field" id="cleanRow">
+          <legend>The writing</legend>
+          <label class="check"><input type="checkbox" id="cleanUp" checked> Clean up the spelling and sentences first</label>
+          <p class="hint" id="cleanHint">The proofreader and the sentence checker go over every section before anything is recorded: spelling, grammar, run-on and tangled sentences, quotes and who is speaking. Untick it to read the book exactly as written.</p>
+        </fieldset>
 
         <div class="field" id="titleRow" hidden>
           <label for="bookTitle">Title <small class="opt">(optional)</small></label>
@@ -120,7 +137,9 @@
           <select id="chapterPick"></select>
           <label class="check"><input type="checkbox" id="onlyCheck"> Only lines to check</label>
           <label class="check"><input type="checkbox" id="onlyTalk"> Only dialogue</label>
+          <button type="button" class="small-btn" id="tidyBtn">Clean up the writing</button>
         </div>
+        <p class="hint" id="tidyNote" hidden></p>
       </div>
       <ol class="script" id="script"></ol>
       <div class="savebar"><button type="button" class="go" id="saveScript" disabled>Save changes</button><span class="saved" id="scriptSaved"></span></div>
@@ -129,7 +148,7 @@
     <!-- 3 sounds -->
     <section class="tab" id="tab-sounds" hidden>
       <div class="tab-intro">
-        <p>What you hear behind the voices in each scene. Effects play at the words you give in “when”.</p>
+        <p>What you hear behind the voices. Leave a background blank and it follows the book by itself: it starts where the text puts you somewhere (rain, a café, the sea) and lasts only as long as you stay there. Type a sound to play it under the whole section, or <strong>none</strong> for silence. Effects play once, on the words in “when”, for that line only; tick <strong>every time</strong> to play them each time those words are read.</p>
         <div class="field">
           <label for="wishes">Sounds you want to hear <small class="opt">(optional)</small></label>
           <input id="wishes" type="text" maxlength="300" placeholder="rain on windows, crackling fire, seagulls">
@@ -156,6 +175,7 @@
           <select id="voiceModel"><option value="standard">Best acting (standard)</option><option value="turbo">About twice as fast, a little less acting (turbo)</option></select>
           <p class="hint">Changing either one records the lines again with the new setting.</p>
         </div>
+        <label class="check music-row"><input type="checkbox" id="musicOn" checked> Background music <span class="hint">(chosen to fit the book's mood: your music folder first, otherwise free music from Freesound)</span></label>
         <p class="hint" id="cbMissing" hidden>Chatterbox isn't installed on this Mac yet. The studio's README has the one-line install.</p>
       </fieldset>
       <div class="tab-buttons">

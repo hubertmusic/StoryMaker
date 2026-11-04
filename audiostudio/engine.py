@@ -21,12 +21,15 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import sys
 import threading
 import time
 import traceback
 import zipfile
 from pathlib import Path
+
+import requests
 
 HERE = Path(__file__).resolve().parent
 # the StoryMaker program: normally right next to this folder (~/StoryMaker/storymaker.py)
@@ -39,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "1.8 (Nov 2)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "2.1 (Nov 3)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -55,6 +58,7 @@ STUDIO_DEFAULTS = {
     "STUDIO_MAX_LINE_CHARS": "260",               # longer lines are split at sentences for Chatterbox
     "STORYMAKER_PUBLIC_URL": "",                  # the StoryMaker link on the page (blank: same address, port 8095)
     "STORYMAKER_OUTPUT": "",                      # StoryMaker's library folder (blank: the one in storymaker.env)
+    "GUTENDEX_URL": "https://gutendex.com",       # search for free (public-domain) books from Project Gutenberg
 }
 
 
@@ -169,7 +173,8 @@ def new_project(cfg, owner, title, level, chapters, source, cast=None):
     for ci, ch in enumerate(chapters):
         for si, sec in enumerate(ch["sections"]):
             sec["id"] = f"c{ci + 1:03d}s{si + 1:03d}"
-            sec["text"] = sm.normalize_quotes(sec["text"].strip())
+            # line wraps inside a paragraph (plain-text books, pasted text) are undone; paragraphs stay apart
+            sec["text"] = sm.normalize_quotes(re.sub(r"[ \t]*(?<!\n)\n(?!\n)[ \t]*", " ", sec["text"].strip()))
             words += len(sec["text"].split())
     p = {"id": pid, "title": title.strip()[:120] or "Untitled", "owner": owner, "level": level, "source": source,
          "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "engine": cfg["STUDIO_ENGINE"], "narrator": "",
@@ -353,13 +358,58 @@ def read_docx(path):
     return "".join(lines)
 
 
+PAGE_NUMBER = re.compile(r"^\s*(?:page\s+)?(?:\d{1,4}|[ivxlcdm]{1,7})(?:\s+of\s+\d{1,4})?\s*$", re.I)
+
+
 def read_pdf(path):
+    """A PDF's text as a book: page numbers and running headers/footers taken out, words hyphenated across lines
+    joined, the line wraps inside paragraphs undone, and paragraphs kept apart (so speakers stay clear)."""
+    import unicodedata
     from pypdf import PdfReader
-    pages = [pg.extract_text() or "" for pg in PdfReader(path).pages]
-    text = "\n\n".join(pages)
-    text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)            # words hyphenated across lines
-    text = re.sub(r"(?<![.!?”\"’:])\n(?!\n)", " ", text)       # line wraps inside paragraphs
-    return text
+    pages = []
+    for pg in PdfReader(path).pages:
+        t = unicodedata.normalize("NFKC", pg.extract_text() or "")       # ﬁ → fi, ﬂ → fl, odd spaces
+        pages.append([ln.rstrip() for ln in t.replace("\r", "\n").split("\n")])
+    # running headers and footers: the same top or bottom line (numbers aside) on many pages
+    edge = {}
+    for lines in pages:
+        body = [ln for ln in lines if ln.strip()]
+        for ln in body[:2] + body[-2:]:
+            key = re.sub(r"\d+", "#", ln.strip().lower())
+            edge[key] = edge.get(key, 0) + 1
+    repeated = {k for k, n in edge.items() if n >= max(3, len(pages) * 0.3) and len(k) < 90}
+    paras, cur = [], ""
+    for lines in pages:
+        body = [ln for ln in lines if ln.strip()]
+        keep = []
+        for k, ln in enumerate(body):
+            at_edge = k < 2 or k >= len(body) - 2
+            if at_edge and (PAGE_NUMBER.match(ln) or re.sub(r"\d+", "#", ln.strip().lower()) in repeated):
+                continue
+            keep.append(ln.strip())
+        widths = sorted(len(ln) for ln in keep if len(ln) > 20)
+        full = widths[len(widths) // 2] if widths else 60                    # a typical full line on this page
+        for ln in keep:
+            heading = len(ln) < 60 and (CHAPTER_LINE.match(ln) or (ln.isupper() and len(ln.split()) <= 8))
+            if heading:
+                if cur:
+                    paras.append(cur)
+                paras.append(ln)
+                cur = ""
+                continue
+            if cur.endswith("-") and re.match(r"[a-z]", ln):
+                cur = cur[:-1] + ln                                          # hyphen-\nated
+            elif cur and re.match(r"^[“\"‘']", ln) and re.search(r"[.!?…”\"’]$", cur):
+                paras.append(cur)                                            # a new line of dialogue
+                cur = ln
+            else:
+                cur = (cur + " " + ln).strip()
+            if len(ln) < full * 0.8 and re.search(r"[.!?…”\"’:]$", ln):
+                paras.append(cur)                                            # a short last line ends a paragraph
+                cur = ""
+    if cur:
+        paras.append(cur)
+    return "\n\n".join(paras)
 
 
 CAST_HEAD = re.compile(r"^\s*(?:#{1,3}\s*)?\**(characters|the characters|cast|cast of characters|dramatis personae|"
@@ -551,11 +601,11 @@ def _norm_name(n):
     return re.sub(r"\s+", " ", str(n or "")).strip()
 
 
-def ask_patiently(cfg, prompt, system=None, progress=None):
+def ask_patiently(cfg, prompt, system=None, progress=None, as_json=True):
     """The writer, with patience for free plans' "too many requests" limits (Groq, Gemini): wait and try again."""
     for attempt in range(6):
         try:
-            return sm.ask_writer(cfg, prompt, system=system)
+            return sm.ask_writer(cfg, prompt, as_json=as_json, system=system)
         except RuntimeError as e:
             msg = str(e)
             if attempt == 5 or not re.search(r"\b429\b|rate.?limit|too many requests|overloaded|\b503\b", msg, re.I):
@@ -566,6 +616,230 @@ def ask_patiently(cfg, prompt, system=None, progress=None):
             if progress:
                 progress(f"Waiting {int(wait)} s for the writer (free-plan limit)")
             time.sleep(wait)
+
+
+# ───────────────────────────── clean up the writing (optional) ─────────────────────────────
+
+def tidy_text(wc, text, level, names=(), progress=None):
+    """StoryMaker's proofreader and sentence checker over one section. Never worse than before: each step is kept
+    only if it keeps the length (and fixes problems), and an explicit book's text never gains youth words."""
+    system = sm.EXPLICIT_SYSTEM if level == "explicit" else None
+    old = text
+    text = sm.tidy_sentences(text)
+    if wc["STORY_PROVIDER"].lower() == "demo" or len(text.split()) < 40:
+        return text
+    say = lambda t: progress(t) if progress else None
+    try:
+        new = sm.clean_prose(ask_patiently(wc, sm.PROOF_PROMPT.format(text=text, extra=""), system, say, as_json=False))
+        if 0.85 * len(text.split()) <= len(new.split()) <= 1.25 * len(text.split()):
+            text = sm.tidy_sentences(new)
+    except Exception as e:
+        log(f"Proofreading skipped for a section ({str(e)[:100]})")
+    issues = sm.sentence_issues(text, names)
+    for _ in range(2):
+        if not issues:
+            break
+        listed = "\n".join(f"{k + 1}. \"{x[:300]}\": {why}" for k, (x, why) in enumerate(issues[:14]))
+        try:
+            new = sm.clean_prose(ask_patiently(wc, sm.SENTENCE_FIX_PROMPT.format(issues=listed, text=text, extra=""),
+                                               system, say, as_json=False))
+        except Exception as e:
+            log(f"Sentence fixing skipped for a section ({str(e)[:100]})")
+            break
+        new = sm.tidy_sentences(new)
+        left = sm.sentence_issues(new, names)
+        if not (0.85 * len(text.split()) <= len(new.split()) <= 1.2 * len(text.split())) or len(left) >= len(issues):
+            break
+        text, issues = new, left
+    if level == "explicit":
+        young = lambda t: bool(sm.MINOR_HARD.search(t) or sm.youth_mention(t) or sm.young_age(t))
+        if young(text) and not young(old):
+            return sm.tidy_sentences(old)
+    return text
+
+
+def run_tidy(cfg, pid, progress=lambda f, d: None):
+    """Clean up the whole book's writing, section by section (saved as it goes, so it carries on after a stop).
+    Changed sections are split into lines again and, if the book was already cast, cast again."""
+    d, p, s = load_project(cfg, pid)
+    wc = writer_cfg(cfg, p["level"])
+    names = [c["name"] for c in p.get("cast") or []]
+    sections = [sec for ch in p["chapters"] for sec in ch["sections"]]
+    before = after = changed = 0
+    for i, sec in enumerate(sections):
+        if s.setdefault("tidy", {}).get(sec["id"]):
+            continue
+        progress(i / max(1, len(sections)), f"Cleaning up the writing: section {i + 1} of {len(sections)}")
+        found = len(sm.sentence_issues(sec["text"], names))
+        new = tidy_text(wc, sec["text"], p["level"], names,
+                        lambda t: progress(i / max(1, len(sections)), t))
+        left = len(sm.sentence_issues(new, names))
+        better = not (found and left > found)
+        before, after = before + found, after + (left if better else found)
+        d, p, s = load_project(cfg, pid)                  # fresh copy: edits made meanwhile are kept
+        sec = next(x for ch in p["chapters"] for x in ch["sections"] if x["id"] == sec["id"])
+        if new.strip() != sec["text"].strip() and better:
+            sec["text"] = sm.normalize_quotes(new.strip())
+            s["sections"][sec["id"]] = segment_section(sec["text"])
+            s["sections"].pop(sec["id"] + ":cast", None)
+            changed += 1
+        s.setdefault("tidy", {})[sec["id"]] = True
+        save_project(d, p, s)
+    d, p, s = load_project(cfg, pid)
+    p["tidy_pending"] = False
+    p["tidy_result"] = {"sections": len(sections), "changed": changed, "before": before, "after": after}
+    p["words"] = sum(len(x["text"].split()) for ch in p["chapters"] for x in ch["sections"])
+    count_lines(p, s)
+    save_project(d, p, s)
+    log(f"Cleaned up \"{p['title']}\": {changed} of {len(sections)} sections changed; problems {before} → {after}.")
+    if changed and p.get("cast_done"):
+        run_casting(cfg, pid, lambda f, t: progress(0.95, "Casting the changed sections again"))
+
+
+def start_tidy(cfg, pid):
+    """Mark a book for cleaning (again): every section is checked once more."""
+    d, p, s = load_project(cfg, pid)
+    s["tidy"] = {}
+    p["tidy_pending"] = True
+    save_project(d, p, s)
+
+
+# ───────────────────────────── free books (Project Gutenberg, public domain) ─────────────────────────────
+
+UA = {"User-Agent": "StoryMaker-AudioStudio/2.0 (personal audiobook maker)"}
+BOOK_IDEAS_PROMPT = """Someone wants an audiobook of a book. They asked for: "{query}"
+Using what you know about books, which book or books do they most likely mean? Give up to 5, best first.
+For each, say whether it is in the public domain in the United States (published before 1930, or otherwise free),
+so it would be on Project Gutenberg.
+Reply with ONLY JSON: {{"books": [{{"title": "...", "author": "...", "year": 1900, "public_domain": true,
+"note": "one short line about it"}}]}}"""
+
+
+def _gutendex(cfg, params=None, path="/books/"):
+    r = requests.get(cfg["GUTENDEX_URL"].rstrip("/") + path, params=params or {}, headers=UA, timeout=40)
+    r.raise_for_status()
+    return r.json()
+
+
+def _book_card(b, note=""):
+    fmts = b.get("formats") or {}
+    return {"id": b["id"], "title": b.get("title", ""), "authors": ", ".join(
+        re.sub(r"^([^,]+), (.+)$", r"\2 \1", a.get("name", "")) for a in b.get("authors") or []),
+        "years": ", ".join(f"{a.get('birth_year') or '?'}–{a.get('death_year') or '?'}" for a in b.get("authors") or []),
+        "languages": b.get("languages") or [], "downloads": b.get("download_count") or 0, "note": note,
+        "readable": any(k.startswith("text/plain") or k.startswith("application/epub") for k in fmts)}
+
+
+def find_books(cfg, query, level="family"):
+    """Free books for a request: the request searched directly, and, for a description ("the one about a whale")
+    or when nothing turns up, the writer's own knowledge of which book is meant, each looked up on Project
+    Gutenberg. Books that aren't free are listed too, with why, so you can bring your own copy."""
+    query = (query or "").strip()[:200]
+    if not query:
+        return {"results": [], "not_free": []}
+    found, seen, not_free = [], set(), []
+
+    def add(items, note=""):
+        for b in items:
+            if b["id"] not in seen and ("en" in (b.get("languages") or []) or not b.get("languages")):
+                seen.add(b["id"])
+                found.append(_book_card(b, note))
+    try:
+        add((_gutendex(cfg, {"search": query}).get("results") or [])[:8])
+    except Exception as e:
+        log(f"Book search failed ({str(e)[:120]})")
+        raise ValueError("The free-book library (Project Gutenberg) isn't answering. Check the Mac's internet.")
+    if len(query.split()) >= 4 or not found:
+        wc = writer_cfg(cfg, "family")
+        try:
+            ideas = ask_patiently(wc, BOOK_IDEAS_PROMPT.format(query=query)).get("books") or []
+        except Exception as e:
+            log(f"The writer couldn't suggest books ({str(e)[:100]})")
+            ideas = []
+        for idea in ideas[:5]:
+            t, a = str(idea.get("title", "")).strip(), str(idea.get("author", "")).strip()
+            if not t:
+                continue
+            try:
+                hits = _gutendex(cfg, {"search": f"{t} {a.split()[-1] if a else ''}".strip()}).get("results") or []
+            except Exception:
+                hits = []
+            words = set(re.findall(r"[a-z]{3,}", t.lower()))
+            hits = [h for h in hits if words & set(re.findall(r"[a-z]{3,}", h.get("title", "").lower()))]
+            if hits:
+                add(hits[:2], str(idea.get("note", ""))[:160])
+            else:
+                not_free.append({"title": t, "author": a, "year": idea.get("year"),
+                                 "note": ("Not on Project Gutenberg: it's most likely still under copyright. "
+                                          "If you own a copy (EPUB, PDF or text), bring it in as a file.")
+                                 if not idea.get("public_domain") else
+                                 "It should be free, but Project Gutenberg doesn't have it. Try another title."})
+    found.sort(key=lambda b: (not b["readable"], -b["downloads"]))
+    return {"results": found[:12], "not_free": not_free[:5]}
+
+
+GUTENBERG_START = re.compile(r"\*\*\*\s*START OF (?:THE|THIS) PROJECT GUTENBERG E(?:BOOK|TEXT)[^\n]*\*\*\*", re.I)
+GUTENBERG_END = re.compile(r"\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG E(?:BOOK|TEXT)[^\n]*\*\*\*", re.I)
+
+
+def gutenberg_text(raw):
+    """A Project Gutenberg plain-text book without its header, licence and footer, and without the
+    transcriber's notes and the table of contents (they aren't read aloud)."""
+    m1, m2 = GUTENBERG_START.search(raw), GUTENBERG_END.search(raw)
+    text = raw[m1.end() if m1 else 0:m2.start() if m2 else len(raw)]
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r"^\s*(?:Produced by|Transcribed from|E-text prepared by|This e-?book was produced)[^\n]*(?:\n[^\n]+)*",
+                  "", text, flags=re.I | re.M)
+    text = re.sub(r"\[Illustration[^\]]*\]", "", text, flags=re.I)
+    text = re.sub(r"(?<=\w)_(\w[^_\n]*)_|_(\w[^_\n]*)_", lambda m_: m_.group(1) or m_.group(2), text)  # _italics_
+    lines = text.split("\n")
+    # a table of contents: a run of short heading-like lines near the start; keep only the last time each appears
+    heads = [i for i, ln in enumerate(lines[:800]) if CHAPTER_LINE.match(ln) and len(ln) < 90]
+    if len(heads) >= 4:
+        first_text = next((i for i in heads if any(len(x.split()) > 12 for x in lines[i + 1:i + 12])), None)
+        if first_text and first_text > heads[0]:
+            contents_end = first_text
+            lines = lines[:heads[0]] + lines[contents_end:]
+    return "\n".join(lines).strip()
+
+
+def import_gutenberg(cfg, owner, book_id, level):
+    """Bring in a free book from Project Gutenberg by its number."""
+    b = _gutendex(cfg, path=f"/books/{int(book_id)}")
+    fmts = b.get("formats") or {}
+    url = next((fmts[k] for k in ("text/plain; charset=utf-8", "text/plain; charset=us-ascii", "text/plain")
+                if k in fmts and not fmts[k].endswith(".zip")), None)
+    card = _book_card(b)
+    title = card["title"][:120]
+    if url:
+        r = requests.get(url, headers=UA, timeout=120)
+        r.raise_for_status()
+        raw = r.content.decode("utf-8", "replace")
+        text = gutenberg_text(raw)
+        text, cast = extract_characters(text)
+        chapters = split_chapters(text)
+        for ch in chapters:
+            ch.pop("front_title", None)
+    else:
+        epub = next((fmts[k] for k in fmts if k.startswith("application/epub")), None)
+        if not epub:
+            raise ValueError("That book has no text version to read.")
+        r = requests.get(epub, headers=UA, timeout=120)
+        r.raise_for_status()
+        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as f:
+            f.write(r.content)
+        try:
+            _, chapters = read_epub(f.name)
+        finally:
+            os.unlink(f.name)
+        chapters = [ch for ch in chapters if not re.search(r"project gutenberg", " ".join(
+            x["text"][:400] for x in ch["sections"][:1]), re.I)]
+        cast = []
+    if not chapters:
+        raise ValueError("No readable text was found in that book.")
+    return new_project(cfg, owner, title, level, chapters,
+                       {"type": "gutenberg", "id": int(book_id), "author": card["authors"],
+                        "url": f"https://www.gutenberg.org/ebooks/{int(book_id)}"}, cast)
 
 
 def run_casting(cfg, pid, progress=lambda f, d: None, only=None):
@@ -881,8 +1155,8 @@ def ga_type(c):
 def voice_library(cfg):
     """Every voice you can pick: the Kokoro voices (Chatterbox learns them from a short sample made with
     Kokoro) and your own clips in the voices folder (only voices you have the right to use)."""
-    out = [{"id": f"kokoro:{v[0]}", "name": v[1], "gender": v[2], "accent": v[3], "note": v[4], "own": False}
-           for v in sm.KOKORO_CATALOGUE]
+    out = [{"id": f"kokoro:{v[0]}", "name": v[1], "gender": v[2], "accent": v[3], "note": v[4], "own": False,
+            "group": sm.voice_group(v)} for v in sm.KOKORO_CATALOGUE]
     meta_file = studio_dir(cfg) / "voices" / "voices.json"
     meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
     for f in sorted((studio_dir(cfg) / "voices").glob("*")):
@@ -890,7 +1164,7 @@ def voice_library(cfg):
             m = meta.get(f.name, {})
             out.append({"id": f"clip:{f.name}", "name": m.get("name") or f.stem.replace("-", " ").replace("_", " ").title(),
                         "gender": m.get("gender", "female"), "accent": m.get("accent", ""), "note": m.get("note", "your clip"),
-                        "own": True})
+                        "own": True, "group": "own"})
     return out
 
 
@@ -1184,7 +1458,10 @@ class Worker:
     def submit(self, pid, kind, **kw):
         d = project_dir(self.cfg, pid)
         with self.cv:
-            if any(j[0] == pid for j in self.queue):
+            waiting = next((j for j in self.queue if j[0] == pid), None)
+            if waiting and waiting[1] == "tidy":       # cleaning is done first by any job anyway
+                self.queue.remove(waiting)
+            elif waiting:
                 raise ValueError("This book already has a job waiting.")
             self.queue.append((pid, kind, kw))
             write_status(d, state="queued", job=kind, progress=0, detail="Waiting its turn", error=None)
@@ -1237,7 +1514,12 @@ class Worker:
 
     def _run(self, d, pid, kind, kw, progress):
         write_status(d, state="running", job=kind, progress=0, detail="Starting", error=None)
-        if kind == "cast":
+        _, p, _ = load_project(self.cfg, pid)
+        if p.get("tidy_pending"):                  # the writing is cleaned up first, before anything is cast or read
+            run_tidy(self.cfg, pid, lambda f, t: progress(f, t) if kind == "tidy" else progress(0, t))
+        if kind == "tidy":
+            pass
+        elif kind == "cast":
             run_casting(self.cfg, pid, progress, kw.get("only"))
         elif kind == "sounds":
             run_sounds(self.cfg, pid, progress, kw.get("redo", False))
@@ -1365,7 +1647,8 @@ def mix_chapter(cfg, rcfg, d, p, s, ci, plan, engine):
     sig = hashlib.sha1(json.dumps([[it[0], it[1]["text"], it[2], it[3], it[4]] for it in plan] +
                                   [sec.get("sound") for sec in ch["sections"]] +
                                   [engine, cfg.get("SOUNDSCAPES"), cfg.get("VOICE_POLISH"), cfg.get("AMBIENCE_VOLUME"),
-                                   cfg.get("EFFECTS_VOLUME")], sort_keys=True).encode()).hexdigest()[:12]
+                                   cfg.get("EFFECTS_VOLUME"), p.get("music", "on"), cfg.get("MUSIC_VOLUME"),
+                                   cfg.get("MUSIC_MODE"), "bed3"], sort_keys=True).encode()).hexdigest()[:12]
     final = d / "out" / "chapters" / f"{ci + 1:03d}.flac"
     sigf = final.with_suffix(".sig")
     if sm.valid_media(final) and sigf.exists() and sigf.read_text() == sig:
@@ -1403,9 +1686,16 @@ def mix_chapter(cfg, rcfg, d, p, s, ci, plan, engine):
             str(voice)])
     story = {"title": p["title"], "scenes": [{"heading": ch["title"], "narration": sec["text"], "sound": sec.get("sound")}
                                              for sec in ch["sections"]]}
-    bed = None
-    if cfg["SOUNDSCAPES"].lower() == "on":
-        bed, credits = sm.build_bed(rcfg, story, timeline, job, p["level"])
+    bed, credits = None, []
+    music = None
+    if p.get("music", "on") == "on":       # the same track for the whole book, chosen by its mood
+        try:
+            music = sm.pick_music(rcfg, p.get("genre", ""), p.get("music_choice"), p["id"], p["level"])
+        except Exception as e:
+            log(f"No music ({str(e)[:100]})")
+    if cfg["SOUNDSCAPES"].lower() == "on" or music:
+        bed, credits = sm.build_bed(rcfg, story, timeline, job, p["level"], music,
+                                    with_sounds=cfg["SOUNDSCAPES"].lower() == "on")
         if credits:
             cred = d / "out" / "credits.json"
             allc = json.loads(cred.read_text()) if cred.exists() else {}
@@ -1573,9 +1863,7 @@ def update_sounds(cfg, pid, sounds, wishes=None):
         sec = by_id.get(sec_id)
         if not sec or not isinstance(plan, dict):
             continue
-        fx = [{"sound": str(f.get("sound", ""))[:60], "at": str(f.get("at", ""))[:120]}
-              for f in plan.get("effects") or [] if isinstance(f, dict) and str(f.get("sound", "")).strip()][:8]
-        sec["sound"] = {"ambience": str(plan.get("ambience") or "none")[:80] or "none", "effects": fx}
+        sec["sound"] = sm.clean_sound_plan(plan, sec.get("sound"))
     if wishes is not None:
         p["sound_wishes"] = str(wishes)[:300]
     save_project(d, p)

@@ -7,6 +7,28 @@ cover.
 It runs directly on the Mac, like Ollama, not in Docker. That lets the voices use the Mac's graphics chip.
 You sign in with your StoryMaker account, and your grown-up settings carry over.
 
+## Bringing in a book
+
+- **StoryMaker:** any story in your library.
+- **A file:** EPUB, Word (.docx), PDF, plain text or Markdown. PDFs are read like a book: page numbers and the
+  running headers and footers are taken out, words split across lines are joined, and paragraphs are kept apart so
+  it's clear who is speaking.
+- **Paste:** any text.
+- **Free book:** search Project Gutenberg's free library of classics that are out of copyright in the US (mostly
+  published before 1930). Type a title or an author, or describe the book ("the one where a scientist makes a
+  monster") and the AI works out which book you mean. Books that aren't free are listed with a note saying so;
+  for those, bring in your own copy as a file. Gutenberg's header, licence, table of contents and transcriber's
+  notes are left out, so only the book itself is read.
+
+**The writing:** "Clean up the spelling and sentences first" runs StoryMaker's proofreader and sentence checker
+over every section before anything is cast or recorded. It fixes spelling, grammar, run-on and tangled sentences,
+quotes, and who is speaking, and the meaning, names and style stay the same. A section is never left worse than
+it was. It's ticked for files, pasted text and free books, and unticked for StoryMaker stories, which were
+proofread when they were written. Untick it to read the book exactly as written. You can also run it later from
+the Script step with **Clean up the writing**; changed sections are cast again, and their lines are recorded again
+the next time you record. Cleaning a whole novel goes through the writer section by section, so it takes a while,
+and on Groq's free plan the studio waits out the limits by itself.
+
 ## How it gets the voices right
 
 1. **Characters list.** Every StoryMaker story now starts with a Characters list, for example "Mira: a woman",
@@ -97,6 +119,7 @@ opens it for you. When StoryMaker is open at the same address, you're signed in 
 | `CHATTERBOX_MODEL` | `standard` (best acting, uses the emotions) or `turbo` (faster) |
 | `STORYMAKER_URL` | where StoryMaker runs (default `http://localhost:8095`) |
 | `STUDIO_DIR` | where books and recordings are kept (default `~/StoryMaker/studio`) |
+| `GUTENDEX_URL` | the free-book search (default `https://gutendex.com`, the search for Project Gutenberg) |
 
 The writer used for casting, the Freesound key, and the sound and voice-polish settings all come from
 `~/StoryMaker/storymaker.env`.

@@ -134,12 +134,14 @@ fewer scenes or run it on the Mac.
 
 ## 4. Music and notifications (optional)
 
-**Music:** make the folder `~/StoryMaker/music` and drop in MP3 or M4A tracks you have the right to
-use. The YouTube Audio Library and Pixabay Music have free ones. StoryMaker picks a track whose file
-name contains a word from the genre (so `adventure-theme.mp3` for "heartwarming adventure"),
-otherwise a random one. It loops and fades the track and lowers it about 13 dB whenever the narrator
-speaks. Use `--music piano` to pick a track by name, or `--music off` for none. With no files in the
-folder, there's simply no music.
+**Music:** music plays softly under the whole story and dips while someone speaks. It's chosen to fit the mood:
+romantic for Mature and Explicit, tense for thrillers, playful for kids, epic for adventure, and so on. Your own
+tracks come first: drop MP3 or M4A files you have the right to use into `~/StoryMaker/music` and name them by mood,
+for example `romantic-piano.mp3`, `tense-strings.mp3` or `calm-acoustic.mp3`. If none fits (or the folder is
+empty), free music that matches the mood is downloaded from Freesound once and kept, with its credit in the sound
+credits. Audio Studio does the same, with a **Background music** box in the Record step. For music only at the
+start, at each new chapter and at the end, set `MUSIC_MODE=moments`. Use `--music piano` to pick a track by name,
+or `--music off` for none.
 
 **Notifications:** install the free **ntfy** app on your iPhone, tap **+**, and subscribe to a
 hard-to-guess topic name like `storymaker-hub-7f3k9q`. Put the same name in `storymaker.env` as
@@ -605,16 +607,53 @@ Press **Style** at the top of StoryMaker to teach it your taste.
   likely misspellings. Small things (doubled words, stray spaces, a missing capital) are fixed directly. The rest
   go back to the writer as a numbered list, and only those sentences are rewritten, up to twice. A fix is kept only
   when it has fewer problems and keeps the length. It's part of **Proofread every scene**.
+- **Clean up stories you already have:** open a story and press **Clean up the writing**. It shows how many
+  sentence and spelling problems the checker finds, with examples. **Clean it up** then runs the proofreader and
+  the sentence checker over every scene. The events, names, style, heat and sounds stay the same, and the audio is
+  remade with only the changed lines recorded again. To do many at once, use **Clean up the writing** next to the
+  Library heading. It lists every story with its count, ticks the ones with problems, and cleans them up one
+  after another in the background. From Terminal: `--check-writing STORY` counts and `--cleanup STORY,STORY`
+  cleans.
 - **Fresh names:** every story gets its own random set of names to choose from, and the overused ones (Mira,
   Jake, Elara, Lily…) and names from your recent stories are left out. Names you write in the idea are kept.
-- **More voices and accents:** French, Spanish, Italian, Brazilian, Indian, Japanese and Chinese accents, plus
-  lighter accents (an English voice blended with an accented one). Pick them under Voices on any story, or in
-  Audio Studio's cast.
+- **More voices and accents:** 54 English voices: Kokoro's 28, plus 26 character voices made by blending two of
+  them (Scarlett, smoky and sultry; Silas, gravelly; Victor, commanding; Pippa, bubbly; Edmund, grandfatherly…).
+  Also French, Spanish, Italian, Brazilian, Indian, Japanese and Chinese accents, strong and light. Pick them
+  under Voices on any story, or in Audio Studio's cast; the lists are grouped into voices, character voices and
+  accents. New characters are also given character voices automatically.
+- **Acting with the free voices:** each line is read the way the story says it's said. "She whispered" is soft
+  and breathy; "he shouted" is louder and quicker; "she sobbed" is slower and lower; "he snapped" is sharp; "she
+  laughed" is lighter. (Chatterbox in Audio Studio acts with its own emotions on top.)
 - **Faster local writing:** on the Mac, give Ollama these two settings once, then quit and reopen Ollama:
   `launchctl setenv OLLAMA_FLASH_ATTENTION 1` and `launchctl setenv OLLAMA_KV_CACHE_TYPE q8_0`.
 
 ## 15. Sounds, pictures and video
 
+- **Backgrounds follow the story.** Sentence by sentence, StoryMaker reads where the story is. A background starts at
+  the sentence that puts you somewhere (she walks out into the rain, they reach the café, the waves on the shore),
+  lasts exactly as long as the story stays there (into the next scene too, without a break, when it carries on), and
+  stops when the story moves somewhere else or goes inside. Rain heard from indoors is softer. Quiet rooms
+  (bedroom, kitchen table, living room) and busy places described as quiet ("the street was quiet") get no
+  background. A place mentioned only in what someone says, or used as an image ("waves of relief", "a train of
+  thought"), doesn't count. In **Sounds**, leave a background blank for this, type a sound to have it under the
+  whole scene, or type **none** for silence.
+- **Effects play once, for their moment.** An effect plays at its words and lasts only as long as that line: a knock
+  is a knock (2–3 seconds), and a ringing phone rings to the end of that line, no further. Tick **every time** next
+  to an effect to have it play each time those words are read.
+- **Only sounds that make sense.** A background sound is used only when the scene's own words put you somewhere
+  with that sound (rain, the sea, a busy street, a fire, a café). Quiet rooms, bedrooms and conversations get no
+  background, and hums, room tone and "quiet" backgrounds are never used. An effect plays only when the thing
+  actually happens: "she held her breath" is not breathing.
+- **Love scenes in Explicit stories.** Breathing and moaning are never placed on a word like "breath". Instead,
+  StoryMaker finds the love scenes themselves (several intimate sentences in a row). It lays soft breathing under
+  just that passage, and adds moans at the moments the text describes, such as moaning, gasping, crying out and the
+  climax. Each moan is a woman's or a man's depending on who the sentence is about. They're kept low and dip
+  under the voice, so the words always come first. Your own recordings in `~/StoryMaker/sounds`, named for
+  example `female-moaning-1.wav` or `heavy-breathing.wav`, are used before Freesound. Turn it off with
+  `INTIMATE_SOUNDS=off`.
+- **Older stories:** the same checks run whenever the audio is made, so **Remake the audio** on an older story
+  removes the out-of-place sounds. To have the AI choose its sounds again under the new rules, tick **Pick the
+  sounds again** under Remake the audio.
 - **Sound effects land on the right words.** Every effect is checked against the scene's text. If the AI's "when"
   words aren't really in the scene, the sentence that best matches the sound is used instead (a phone ringing goes
   to the sentence about the phone). An effect that fits nowhere is left out rather than played at a random moment.

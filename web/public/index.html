@@ -239,8 +239,12 @@
   <section id="library" class="library">
     <div class="library-head">
       <h2>Library</h2>
-      <select id="filter" aria-label="Show stories from"><option value="">All stories</option></select>
+      <div class="library-tools">
+        <button type="button" class="small-btn" id="cleanupAllBtn">Clean up the writing</button>
+        <select id="filter" aria-label="Show stories from"><option value="">All stories</option></select>
+      </div>
     </div>
+    <div class="cleanup-all" id="cleanupAll" hidden></div>
     <div class="unfinished" id="unfinished" hidden>
       <h3>Unfinished</h3>
       <p class="hint">Stories that stopped before the end. What's already written is kept. <strong>Recover</strong> finishes it from where it stopped. Stories cut off by a restart carry on by themselves.</p>

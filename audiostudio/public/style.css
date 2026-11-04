@@ -57,7 +57,7 @@ legend, .field > label { display: block; font-weight: 700; margin-bottom: 8px; }
 .choice label:has(input:checked) { background: var(--shelf-2); color: var(--paper); font-weight: 700; }
 .choice label:has(input:focus-visible) { outline: 2px solid var(--lamp); outline-offset: 2px; }
 
-textarea, input:not([type]), input[type="text"], input[type="password"], select {
+textarea, input:not([type]), input[type="text"], input[type="search"], input[type="password"], select {
   width: 100%; font: inherit; color: var(--paper);
   background: var(--dusk); border: 1px solid var(--line); border-radius: var(--radius-sm);
   padding: 10px 12px;
@@ -317,7 +317,8 @@ small.opt { font-weight: 400; color: var(--muted); }
 .voice-row .who small { color: var(--muted); font-weight: 400; }
 .sound-scene { display: grid; gap: 6px; padding: 12px 0; border-top: 1px solid var(--shelf-2); }
 .sound-scene .scene-name { font-weight: 700; font-size: 15px; }
-.fx-row { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 6px; align-items: center; }
+.fx-row { display: grid; grid-template-columns: 1fr 1.4fr auto auto; gap: 6px; align-items: center; }
+.fx-row .every { white-space: nowrap; font-size: 14px; }
 .fx-row input { padding: 7px 10px; font-size: 15px; }
 @media (max-width: 560px) { .fx-row { grid-template-columns: 1fr; } }
 

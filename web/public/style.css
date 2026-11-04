@@ -317,7 +317,8 @@ small.opt { font-weight: 400; color: var(--muted); }
 .voice-row .who small { color: var(--muted); font-weight: 400; }
 .sound-scene { display: grid; gap: 6px; padding: 12px 0; border-top: 1px solid var(--shelf-2); }
 .sound-scene .scene-name { font-weight: 700; font-size: 15px; }
-.fx-row { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 6px; align-items: center; }
+.fx-row { display: grid; grid-template-columns: 1fr 1.4fr auto auto; gap: 6px; align-items: center; }
+.fx-row .every { white-space: nowrap; font-size: 14px; }
 .fx-row input { padding: 7px 10px; font-size: 15px; }
 @media (max-width: 560px) { .fx-row { grid-template-columns: 1fr; } }
 
@@ -381,3 +382,20 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .choice.five-col label { font-size: 15px; padding: 9px 4px; }
 #profHint { margin: 6px 0 0; }
 @media (max-width: 640px) { .choice.five-col { grid-template-columns: repeat(2, 1fr); } }
+
+/* clean up the writing */
+.library-tools { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex: 1 1 auto; }
+.library-head .library-tools select { width: min(280px, 100%); }
+@media (max-width: 560px) { .library-tools { flex-wrap: wrap; justify-content: flex-start; } }
+.cleanup-all { margin-top: 18px; padding: 18px 20px; border: 1px solid var(--line, rgba(255,255,255,.14)); border-radius: 14px; }
+.cleanup-all h3 { font: 400 22px/1.2 var(--serif); margin: 0 0 4px; }
+.wr-rows { display: grid; gap: 4px; margin: 10px 0 14px; max-height: 360px; overflow: auto; }
+.wr-row { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 6px 2px; }
+.wr-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wr-count { opacity: .7; font-size: .9em; white-space: nowrap; }
+.wr-bar { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.writing-report .wr-head { margin: 4px 0 8px; font-weight: 600; }
+.wr-list { margin: 0 0 10px; padding-left: 18px; display: grid; gap: 8px; }
+.wr-list q { display: block; font-style: italic; }
+.wr-why { display: block; opacity: .75; font-size: .88em; }
+@media (max-width: 560px) { .wr-row { grid-template-columns: auto 1fr; } .wr-count { grid-column: 2; } }
