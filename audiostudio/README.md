@@ -120,6 +120,14 @@ apps. When it's off, Mature and Explicit books, StoryMaker stories and levels ar
 takes effect straight away and needs nothing. Turning it back on asks for your password (five wrong tries locks it for
 10 minutes). Only the owner's account has the switch; other people never see grown-up books.
 
+## Keeping Draw Things' API server on
+
+Draw Things forgets its API Server switch every time it closes. The studio checks every minute and, when the
+server is off, opens Draw Things in the background and turns the switch back on (Settings → All → API Server).
+Allow it once: System Settings → Privacy & Security → Accessibility → "Python". Settings in the studio shows
+whether it's on, with a **Turn it on now** button. `DRAW_THINGS_REOPEN=off` stops it reopening Draw Things after
+you quit it; `DRAW_THINGS_ALWAYS_ON=off` turns this off completely.
+
 ## Use it from anywhere (Tailscale)
 
 ```bash

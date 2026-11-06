@@ -327,3 +327,11 @@ small.opt { font-weight: 400; color: var(--muted); }
 .explicit-box > label { font-weight: 700; }
 .explicit-box .field { margin-top: 12px; }
 .mini-legend { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; }
+
+/* Draw Things status in Settings */
+.dt { margin-top: 22px; padding-top: 18px; border-top: 1px solid color-mix(in srgb, var(--muted) 30%, transparent); }
+.dt h4 { margin: 0 0 8px; }
+.dt-state { font-weight: 600; margin: 0 0 6px; }
+.dt-state.on::before, .dt-state.off::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+.dt-state.on::before { background: #3fa96b; }
+.dt-state.off::before { background: #d0603f; }

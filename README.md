@@ -193,8 +193,7 @@ it, download an SDXL model in its model list (a "Lightning" or "Turbo" SDXL is f
 - Explicit stories can have pictures and slideshow video too, but always tasteful (no nudity). They're
   made on your Mac, never online.
 
-Keep Draw Things open while stories are made. If the web page can't reach it, check that Draw Things'
-API server allows connections from other apps on this Mac. Real AI video (moving characters) doesn't
+Draw Things forgets that switch whenever it closes; Audio Studio turns it back on by itself (section 18). Real AI video (moving characters) doesn't
 fit in 16 GB at a usable speed; for that, Gemini video clips (paid) work for non-explicit stories.
 
 **Explicit (18+):** the online AIs (Groq, Claude, Gemini, OpenAI, ElevenLabs) don't allow explicit
@@ -669,7 +668,7 @@ Press **Style** at the top of StoryMaker to teach it your taste.
   all drawn by Draw Things on your Mac; nothing leaves the computer. They are always tasteful: everyone is an
   adult and fully clothed. Anything sexual in a picture prompt is taken out before it reaches Draw Things, which
   also gets a strong "never show" list. To turn it on:
-  1. Open Draw Things, then Settings → API Server: turn it on, HTTP, port 7860. Keep the app open.
+  1. Open Draw Things, then Settings → API Server: turn it on, HTTP, port 7860 (after that Audio Studio keeps it on).
   2. In `~/StoryMaker/storymaker.env`: `LOCAL_IMAGE_URL=http://host.docker.internal:7860`.
      For SDXL Turbo or Lightning models, also `LOCAL_IMAGE_STEPS=4` and `LOCAL_IMAGE_CFG=1.5`.
   3. `cd ~/StoryMaker && docker compose up -d`. The Video choice and the picture book then work for Explicit.
@@ -717,5 +716,23 @@ when a cut-off story is carried on, and Draw Things is opened again in the middl
 
 How the opening works: StoryMaker runs inside Docker and can't open Mac apps, so it asks Audio Studio (which
 runs on the Mac) to. The two share a private key in StoryMaker's library folder, so nothing else can ask. Audio
-Studio must be running (it starts by itself a few minutes after the Mac starts). In Draw Things, turn on Settings
-→ API Server (HTTP, port 7860) once; it stays on after that.
+Studio must be running (it starts by itself a few minutes after the Mac starts).
+
+## 18. Draw Things' API server stays on
+
+Draw Things forgets its **Settings → API Server** switch every time the app closes (a restart, a crash, a Mac
+update, quitting it). So Audio Studio watches it: every minute it checks that the server answers on port 7860,
+and if it doesn't, it opens Draw Things in the background, goes to Settings → All → API Server and turns the
+switch on, the way you would.
+
+- **Allow it once:** the first time, the Mac asks whether "Python" may control the computer. Say yes, or turn it
+  on in System Settings → Privacy & Security → Accessibility. (If you start the studio by hand in a Terminal
+  window, it's Terminal that needs the permission.) After a Python update the Mac may ask again.
+- **Check it:** Audio Studio → Settings shows "Draw Things: On / Off", with a **Turn it on now** button.
+- **It only acts when the server is off.** It never touches the switch when the server is answering, and after
+  a failed attempt it waits 10 minutes before trying again.
+- **Quit Draw Things on purpose?** It's opened again within a minute. To stop that, put `DRAW_THINGS_REOPEN=off`
+  in `audiostudio/studio.env` (the server is still switched on whenever Draw Things is open). To turn all of
+  this off: `DRAW_THINGS_ALWAYS_ON=off`.
+- If a Draw Things update moves the setting somewhere else, the studio log says it couldn't find the switch;
+  turn it on by hand until StoryMaker is updated for the new layout.

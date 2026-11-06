@@ -67,7 +67,30 @@ function openSettings() {
   $("grownupOn").checked = !!me.adultSwitch;
   $("grownupPwRow").hidden = $("grownupSave").hidden = true; $("grownupMsg").hidden = true; $("grownupPw").value = "";
   $("settingsDlg").showModal();
+  showDrawThings();
 }
+// Draw Things: is its API server on? (the studio keeps it on)
+function drawThingsText(d) {
+  if (d.up) return "On: StoryMaker and the studio can draw pictures.";
+  if (!d.open) return "Off: Draw Things is closed." + (d.watching ? " The studio will open it within a minute." : "");
+  return "Off: Draw Things is open but its API Server switch is off." + (d.detail ? ` (${d.detail})` : "");
+}
+async function showDrawThings(d) {
+  d = d || await api("/api/drawthings");
+  if (!d || d.here === undefined) return;
+  $("dtBlock").hidden = !d.here;
+  $("dtState").textContent = drawThingsText(d);
+  $("dtState").className = "dt-state " + (d.up ? "on" : "off");
+  $("dtAllow").hidden = !!d.allowed;
+  $("dtFix").hidden = !!d.up;
+}
+$("dtFix").onclick = async () => {
+  $("dtFix").disabled = true; $("dtFix").textContent = "Turning it on…";
+  const r = await api("/api/drawthings/fix", { method: "POST" });
+  $("dtFix").disabled = false; $("dtFix").textContent = "Turn it on now";
+  if (r && r.here !== undefined) showDrawThings(r);
+  if (r && !r.ok && r.detail) $("dtState").textContent = "Still off: " + r.detail;
+};
 async function setGrownup(on) {
   const r = await api("/api/grownup", { json: { on, current: $("grownupPw").value } });
   if (!r.ok) { $("grownupMsg").textContent = r.error || "That didn't work."; $("grownupMsg").hidden = false; $("grownupOn").checked = !on; return; }

@@ -236,6 +236,13 @@
     <button type="button" class="go" id="grownupSave" hidden>Show them</button>
   </section>
   <p class="hint" id="grownupMember" hidden>Only the owner can show or hide grown-up books.</p>
+  <section class="dt" id="dtBlock" hidden>
+    <h4>Draw Things (pictures)</h4>
+    <p class="dt-state" id="dtState" role="status"></p>
+    <p class="hint">Draw Things forgets its API Server switch every time it closes. The studio checks every minute and turns it back on by itself.</p>
+    <p class="hint" id="dtAllow" hidden>To let it, open System Settings → Privacy &amp; Security → Accessibility and turn on “Python” (or Terminal, if you started the studio in a Terminal window). Then press the button below.</p>
+    <button type="button" class="go" id="dtFix">Turn it on now</button>
+  </section>
 </dialog>
 
 <audio id="player" hidden></audio>

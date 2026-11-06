@@ -1,19 +1,21 @@
-# Your private settings and keys: never in git
+# Secrets: never on GitHub
 storymaker.env
 audiostudio/studio.env
-*.env.rescued
+.helper-token
+*.env.local
 
-# Your stories, sounds, music and Audio Studio books
+# Your stories, books, sounds, music and downloaded voice models (big, private, and kept on the Mac)
 output/
+studio/
 sounds/
 music/
-studio/
+kokoro/
 
-# Installed or generated
+# Rebuilt by the installers
 audiostudio/venv/
 web/node_modules/
-web/package-lock.json
 __pycache__/
 *.pyc
-*.log
+
+# Mac clutter
 .DS_Store

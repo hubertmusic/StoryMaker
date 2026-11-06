@@ -10,3 +10,5 @@ pypdf>=4.0
 python-docx>=1.1
 edge-tts>=6.1
 pyspellchecker>=0.8
+pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"   # turns Draw Things' API server back on
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"

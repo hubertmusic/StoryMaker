@@ -19,6 +19,7 @@ import uvicorn
 from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
+import drawthings as DT
 import engine as E
 
 cfg = E.load_config()
@@ -384,8 +385,23 @@ def helper_open(body: dict = Body(...), x_helper_token: str = Header("")):
     app_ = str(body.get("app", ""))
     if app_ not in E.sm.MAC_APPS:
         raise HTTPException(400, "Unknown app.")
-    ok, detail = E.sm.open_mac_app(cfg, app_)
+    if app_ == "draw-things" and DT.server_address(cfg):
+        ok, detail = DT.ensure_server(cfg)          # opens it and turns its API Server switch back on
+    else:
+        ok, detail = E.sm.open_mac_app(cfg, app_)
     return {"ok": ok, "detail": detail}
+
+
+@app.get("/api/drawthings")
+def drawthings_status(user=Depends(current_user)):
+    return DT.status(cfg)
+
+
+@app.post("/api/drawthings/fix")
+def drawthings_fix(user=Depends(current_user)):
+    ok, detail = DT.ensure_server(cfg)
+    DT.state.update(up=ok, detail=detail, failed_at=0.0)
+    return {"ok": ok, "detail": detail, **DT.status(cfg)}
 
 
 @app.get("/api/books/search")
@@ -621,5 +637,7 @@ def voice_upload(file: UploadFile = File(...), name: str = Form(""), gender: str
 if __name__ == "__main__":
     wait_for_port(int(cfg["STUDIO_PORT"]))
     tidy_stale_jobs()
+    if DT.start_watchdog(cfg):
+        E.log("Keeping Draw Things' API server on (DRAW_THINGS_ALWAYS_ON=off in studio.env stops this).")
     E.log(f"Audio Studio {E.STUDIO_VERSION} on http://localhost:{cfg['STUDIO_PORT']}  (sign-in from StoryMaker at {SM})")
     uvicorn.run(app, host="0.0.0.0", port=int(cfg["STUDIO_PORT"]), log_level="warning")

@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "2.5 (Nov 5)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "2.6 (Nov 5)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -59,6 +59,8 @@ STUDIO_DEFAULTS = {
     "STORYMAKER_PUBLIC_URL": "",                  # the StoryMaker link on the page (blank: same address, port 8095)
     "STORYMAKER_OUTPUT": "",                      # StoryMaker's library folder (blank: the one in storymaker.env)
     "GUTENDEX_URL": "https://gutendex.com",       # search for free (public-domain) books from Project Gutenberg
+    "DRAW_THINGS_ALWAYS_ON": "on",                # turn Draw Things' API Server back on whenever it goes off
+    "DRAW_THINGS_REOPEN": "on",                   # …and open Draw Things again if it's been quit
 }
 
 

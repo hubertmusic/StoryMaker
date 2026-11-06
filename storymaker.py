@@ -2354,11 +2354,12 @@ def open_mac_app(cfg, app):
         time.sleep(2)
         if ready():
             return True, f"opened {name}"
-    return False, f"{name} opened but isn't answering: is its API server on?"
+    return False, f"{name} opened but isn't answering: its API Server switch is off"
 
 
-DRAW_THINGS_FIX = ("Open Draw Things once and turn on Settings → API Server (HTTP, port 7860); it stays on after that. "
-                   "From then on StoryMaker opens Draw Things by itself when a story needs pictures.")
+DRAW_THINGS_FIX = ("Draw Things forgets its API Server switch every time it closes. Audio Studio turns it back on by "
+                   "itself once it's allowed to: System Settings → Privacy & Security → Accessibility → turn on "
+                   "\"Python\". Or turn it on by hand: in Draw Things, Settings → All → API Server (HTTP, port 7860).")
 
 
 def preflight(cfg, args, level, vprovider, auto=True):
