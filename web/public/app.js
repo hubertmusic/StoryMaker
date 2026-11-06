@@ -244,18 +244,38 @@ $("form").addEventListener("submit", async (e) => {
   const what = (r.series ? `Episode ${r.episode} of “${r.series}”. ` : "") +
     (r.chapters > 1 ? `${r.chapters} chapters, ${r.scenes} scenes. ` : "");
   $("priceDetail").textContent = what + (parts.length ? parts.join(", ") + "." : "Nothing here costs money with your current settings.");
+  renderChecks(r.checks || []);
   show("priceView");
 });
 
+// what the story needs, checked before it starts (the writer, voices, picture app, sounds, disk)
+function renderChecks(checks) {
+  const ul = $("checks");
+  ul.replaceChildren();
+  for (const c of checks) {
+    const li = document.createElement("li");
+    const autoOpen = !c.ok && c.item === "Pictures" && /Draw Things/.test(c.detail);
+    li.className = c.ok ? "ok" : c.blocking && !autoOpen ? "bad" : "warn";
+    const mark = document.createElement("span"); mark.className = "mark"; mark.textContent = c.ok ? "✓" : c.blocking && !autoOpen ? "✕" : "!";
+    const txt = document.createElement("span");
+    txt.textContent = `${c.item}: ${c.detail}` + (autoOpen ? ". It will be opened for you when you press Make it." : "")
+      + (!c.ok && c.fix && !autoOpen ? ` ${c.fix}` : "");
+    li.append(mark, txt); ul.appendChild(li);
+  }
+  const blocked = checks.some((c) => c.blocking && !(c.item === "Pictures" && /Draw Things/.test(c.detail)));
+  $("makeBtn").disabled = blocked;
+  $("makeBtn").title = blocked ? "Fix the item marked ✕ first" : "";
+}
 $("changeBtn").addEventListener("click", () => { show("stageEmpty"); $("idea").focus(); });
 
 // ── make it ──
 $("makeBtn").addEventListener("click", async () => {
   $("makeBtn").disabled = true;
   const data = formData();
+  $("makeBtn").textContent = "Checking everything is ready…";
   const r = await api("/api/make", data);
-  $("makeBtn").disabled = false;
-  if (!r.ok) return showError(r.error || "Couldn't start the story.");
+  $("makeBtn").disabled = false; $("makeBtn").textContent = "Make it";
+  if (!r.ok) { if (r.checks) renderChecks(r.checks); return showError(r.error || "Couldn't start the story."); }
   setLamps("writing", data.mode, data.book);
   $("progressTitle").textContent = "Working on it";
   resetPreview();
@@ -823,13 +843,14 @@ function storyTools(s, id, el) {
     const mk = (label) => { const l = document.createElement("label"); l.className = "check"; const c = document.createElement("input"); c.type = "checkbox"; l.append(c, document.createTextNode(" " + label)); return [l, c]; };
     const [vl, vc] = mk("Choose new character voices");
     const [sl, scb] = mk("Pick the sounds again");
+    const [dl, dcb] = mk("Draw new pictures for the video and picture book (with Draw Things: the characters acting out each scene)");
     const go = document.createElement("button"); go.className = "go"; go.type = "button"; go.textContent = "Remake the audio";
     const msg = document.createElement("p"); msg.className = "settings-msg";
-    p.append(vl, sl, go, msg);
+    p.append(vl, sl, ...(features.localPictures ? [dl] : []), go, msg);
     area.appendChild(p);
     const start = async () => {
       go.disabled = true;
-      const r = await api(`/api/stories/${encodeURIComponent(id)}/remaster`, { revoice: vc.checked, redesign: scb.checked });
+      const r = await api(`/api/stories/${encodeURIComponent(id)}/remaster`, { revoice: vc.checked, redesign: scb.checked, redraw: dcb.checked });
       if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
       const m = jobMeter(); p.appendChild(m);
       followJob(r.job_id, m, () => refreshCard(id, el), (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });

@@ -762,7 +762,8 @@ app.post("/api/cleanup", async (req, res) => {
 app.post("/api/stories/:id/remaster", async (req, res) => {
   const id = guard(req, res); if (!id) return;
   const b = req.body || {};
-  const args = ["--remaster", id, "--background", ...(b.revoice ? ["--revoice"] : []), ...(b.redesign ? ["--redesign"] : [])];
+  const args = ["--remaster", id, "--background", ...(b.revoice ? ["--revoice"] : []), ...(b.redesign ? ["--redesign"] : []),
+    ...(b.redraw ? ["--redraw"] : [])];
   res.json(startJob(req, "remaster", id, await runStorymaker(req.user, args)));
 });
 

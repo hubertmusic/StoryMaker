@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "2.2 (Nov 3)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "2.5 (Nov 5)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -620,7 +620,7 @@ def ask_patiently(cfg, prompt, system=None, progress=None, as_json=True):
 
 # ───────────────────────────── clean up the writing (optional) ─────────────────────────────
 
-def tidy_text(wc, text, level, names=(), progress=None):
+def tidy_text(wc, text, level, names=(), progress=None, pov=""):
     """StoryMaker's proofreader and sentence checker over one section. Never worse than before: each step is kept
     only if it keeps the length (and fixes problems), and an explicit book's text never gains youth words."""
     system = sm.EXPLICIT_SYSTEM if level == "explicit" else None
@@ -635,7 +635,7 @@ def tidy_text(wc, text, level, names=(), progress=None):
             text = sm.tidy_sentences(new)
     except Exception as e:
         log(f"Proofreading skipped for a section ({str(e)[:100]})")
-    issues = sm.sentence_issues(text, names)
+    issues = sm.sentence_issues(text, names, pov)
     for _ in range(2):
         if not issues:
             break
@@ -647,7 +647,7 @@ def tidy_text(wc, text, level, names=(), progress=None):
             log(f"Sentence fixing skipped for a section ({str(e)[:100]})")
             break
         new = sm.tidy_sentences(new)
-        left = sm.sentence_issues(new, names)
+        left = sm.sentence_issues(new, names, pov)
         if not (0.85 * len(text.split()) <= len(new.split()) <= 1.2 * len(text.split())) or len(left) >= len(issues):
             break
         text, issues = new, left
@@ -665,15 +665,16 @@ def run_tidy(cfg, pid, progress=lambda f, d: None):
     wc = writer_cfg(cfg, p["level"])
     names = [c["name"] for c in p.get("cast") or []]
     sections = [sec for ch in p["chapters"] for sec in ch["sections"]]
+    pov = sm.detect_pov([x["text"] for x in sections[:40]])
     before = after = changed = 0
     for i, sec in enumerate(sections):
         if s.setdefault("tidy", {}).get(sec["id"]):
             continue
         progress(i / max(1, len(sections)), f"Cleaning up the writing: section {i + 1} of {len(sections)}")
-        found = len(sm.sentence_issues(sec["text"], names))
+        found = len(sm.sentence_issues(sec["text"], names, pov))
         new = tidy_text(wc, sec["text"], p["level"], names,
-                        lambda t: progress(i / max(1, len(sections)), t))
-        left = len(sm.sentence_issues(new, names))
+                        lambda t: progress(i / max(1, len(sections)), t), pov)
+        left = len(sm.sentence_issues(new, names, pov))
         better = not (found and left > found)
         before, after = before + found, after + (left if better else found)
         d, p, s = load_project(cfg, pid)                  # fresh copy: edits made meanwhile are kept
@@ -891,8 +892,16 @@ def run_casting(cfg, pid, progress=lambda f, d: None, only=None):
                     progress=lambda t: progress(b_i / max(1, len(batches)), t))
             except Exception as e:
                 log(f"Casting by the writer failed ({str(e)[:160]}); using the speech tags instead.")
+        if answer is not None and not isinstance(answer, dict):     # an answer in the wrong shape: the speech tags
+            log("The writer's casting answer wasn't usable; using the speech tags instead.")
+            answer = None
         if answer:
-            for ch_ in answer.get("characters") or []:
+            chars = answer.get("characters") if isinstance(answer.get("characters"), list) else []
+            for ch_ in chars:
+                if isinstance(ch_, str):
+                    ch_ = {"name": ch_}
+                if not isinstance(ch_, dict):
+                    continue
                 name = _norm_name(ch_.get("name"))
                 if not name or name.lower() == "narrator":
                     continue
@@ -906,8 +915,13 @@ def run_casting(cfg, pid, progress=lambda f, d: None, only=None):
                     by_name[name.lower()] = c
                 elif not c.get("locked"):
                     c.update(gender=g, age=a, kind=k)
+            quotes = answer.get("quotes") if isinstance(answer.get("quotes"), dict) else {}
             for key, seg in qmap.items():
-                info = (answer.get("quotes") or {}).get(key) or {}
+                info = quotes.get(key) or {}
+                if isinstance(info, str):
+                    info = {"speaker": info}
+                if not isinstance(info, dict):
+                    info = {}
                 who = _norm_name(info.get("speaker"))
                 seg["speaker"] = "Narrator" if who.lower() in ("narrator", "i", "me") else who
                 seg["emotion"] = info.get("emotion") if info.get("emotion") in EMOTIONS else "neutral"
@@ -1525,6 +1539,8 @@ class Worker:
             run_sounds(self.cfg, pid, progress, kw.get("redo", False))
         elif kind == "record":
             run_record(self.cfg, pid, progress, kw.get("chapters"))
+        elif kind == "video":
+            run_video(self.cfg, pid, progress)
         elif kind == "all":
             _, p, _ = load_project(self.cfg, pid)
             if not p.get("cast_done"):
@@ -1962,7 +1978,9 @@ def everything_zip(cfg, pid):
     chs = recorded_chapters(d, p)
     name = safe_name(p["title"])
     files = [(out / "story.m4b", f"{name}.m4b"), (out / "story.mp3", f"{name}.mp3"), (pdf, f"{name}.pdf"),
-             (out / "cover.jpg", "Cover.jpg"), (out / "sound-credits.txt", "Sound credits.txt")]
+             (out / "cover.jpg", "Cover.jpg"), (out / "sound-credits.txt", "Sound credits.txt"),
+             (out / "story.mp4", f"{name} (video).mp4"), (out / "story.srt", f"{name} (video).srt"),
+             (out / "picture-book.pdf", f"{name} (picture book).pdf")]
     for n, c in enumerate(chs, 1):
         t = safe_name(p["chapters"][c["index"]]["title"])
         files.append((c["mp3"], f"Chapters/{n:02d} - {t}.mp3"))
@@ -1977,6 +1995,47 @@ def everything_zip(cfg, pid):
             zf.write(f, f"{name}/{arc}", compress_type=kind)
     tmp.replace(z)
     return z
+
+
+def book_timeline(d, p, work):
+    """The whole recorded book as one sound file and one timeline with a segment per section, in StoryMaker's
+    shape: {"segments": [{"kind": "title"|"scene", "index", "start", "end", "lines"}], "total"}. A chapter's
+    heading belongs to its first section (the book's first heading to the title). None if not all recorded."""
+    chs = recorded_chapters(d, p)
+    if len(chs) != len(p["chapters"]):
+        return None, None
+    work.mkdir(parents=True, exist_ok=True)
+    full = work / "book.wav"
+    (work / "list.txt").write_text("".join(f"file '{c['flac']}'\n" for c in chs))
+    sm.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(work / "list.txt"),
+            "-ar", "44100", "-ac", "2", str(full)])
+    segs, k = [], 0
+    shift = lambda lns, off: [dict(ln, start=round(off + ln["start"], 3), end=round(off + ln["end"], 3)) for ln in lns]
+    for c in chs:
+        tl = json.loads(c["timeline"].read_text())
+        off = c["start"]
+        head = next((g for g in tl["segments"] if g["kind"] == "title"), None)
+        scenes = [g for g in tl["segments"] if g["kind"] == "scene"]
+        for j, g in enumerate(scenes):
+            start, lines = off + g["start"], shift(g["lines"], off)
+            if j == 0 and head:
+                if not segs:
+                    segs.append({"kind": "title", "index": None, "start": round(off, 3), "end": round(start, 3),
+                                 "lines": shift(head["lines"], off)})
+                else:
+                    start, lines = off, shift(head["lines"], off) + lines
+            segs.append({"kind": "scene", "index": k, "start": round(start, 3), "end": round(off + g["end"], 3),
+                         "lines": lines})
+            k += 1
+        if segs:
+            segs[-1]["end"] = round(off + c["length"], 3)        # the pause at the chapter's end, too
+    if not segs or segs[0]["kind"] != "title":
+        segs.insert(0, {"kind": "title", "index": None, "start": 0.0, "end": 0.0, "lines": []})
+    return full, {"segments": segs, "total": round(sum(c["length"] for c in chs), 3)}
+
+
+def book_scenes(p):
+    return [sec for ch in p["chapters"] for sec in ch["sections"]]
 
 
 def send_to_storymaker(cfg, pid):
@@ -2022,6 +2081,177 @@ def send_to_storymaker(cfg, pid):
     tmp = folder / "result.json.tmp"
     tmp.write_text(json.dumps(result, indent=2))
     tmp.replace(folder / "result.json")
+    video = ""
+    if result.get("video_file") and (folder / "story.mp4").exists():
+        video = remake_storymaker_video(cfg, d, p, folder)
     p["sent_to_storymaker"] = result["studio_sent"]
     save_project(d, p)
-    return {"ok": True, "story": src["id"], "had_video": bool(result.get("video_file"))}
+    return {"ok": True, "story": src["id"], "had_video": bool(result.get("video_file")), "video": video}
+
+
+def remake_storymaker_video(cfg, d, p, folder):
+    """The StoryMaker story's video made again around this recording: the same pictures (or clips), each scene's
+    pictures lasting exactly as long as that scene is read now, and subtitles to match. Nothing is drawn again."""
+    story = json.loads((folder / "story.json").read_text())
+    secs = book_scenes(p)
+    if len(secs) != len(story.get("scenes") or []):
+        return ("not remade: the book here has a different number of sections than the story in StoryMaker, so the "
+                "pictures can't be matched to them")
+    for sc, sec in zip(story["scenes"], secs):            # captions and subtitles say what's read now
+        sc["narration"] = sec["text"]
+    work = d / "work" / "sm-video"
+    try:
+        full, timeline = book_timeline(d, p, work)
+        if not timeline:
+            return "not remade: record every chapter first"
+        sm.rebuild_video(writer_cfg(cfg, p["level"]), folder, story, full, timeline, work / "job")
+        result = json.loads((folder / "result.json").read_text())
+        result["video_remade_by_studio"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        (folder / "result.json").write_text(json.dumps(result, indent=2))
+        return "remade"
+    except Exception as e:
+        log(f"Couldn't remake the StoryMaker video ({e})")
+        return f"not remade ({str(e)[:120]})"
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# ───────────────────────────── pictures and a video for any book ─────────────────────────────
+
+LOOK_PROMPT = """You are the art director for an illustrated audiobook of "{title}".
+Here is how it begins:
+---
+{opening}
+---
+Characters: {cast}
+Decide one consistent look for every picture. Reply with ONLY JSON:
+{{"visual_style": "one line: medium, palette, lighting, mood", "characters": "each main character's fixed look in
+a few words (age as an adult or child, hair, build, clothes), separated by semicolons"}}"""
+
+SHOTS_PROMPT = """You are the illustrator of "{title}" ({style}). For each numbered section below, describe ONE illustration
+of its most dramatic or telling moment: which characters are in it (by name), exactly what each is doing (a clear
+action, mid-movement), their expressions, where they are, and the light, in one sentence of 25 to 45 words. Only
+things a picture can show; no words or signs in the picture. {extra}
+Reply with ONLY JSON: {{"pictures": ["...", "..."]}} with exactly {n} entries, in order.
+
+{sections}"""
+
+
+def plan_pictures(cfg, pid, progress=lambda f, t: None):
+    """A look for the whole book and a picture idea for every section (asked once, then kept). A book from
+    StoryMaker keeps StoryMaker's own look and picture ideas."""
+    d, p, s = load_project(cfg, pid)
+    wc = writer_cfg(cfg, p["level"])
+    secs = book_scenes(p)
+    src = p.get("source") or {}
+    sm_story = None
+    if src.get("type") == "storymaker":
+        f = Path(cfg["SM_LIBRARY"]) / src["id"] / "story.json"
+        if f.exists():
+            sm_story = json.loads(f.read_text())
+            if len(sm_story.get("scenes") or []) != len(secs):
+                sm_story = None
+    if sm_story and not p.get("look"):
+        p["look"] = {"visual_style": sm_story.get("visual_style", ""), "characters": sm_story.get("characters", "")}
+        for sec, sc in zip(secs, sm_story["scenes"]):
+            sec.setdefault("image_prompt", sc.get("image_prompt") or "")
+        save_project(d, p)
+    if not p.get("look"):
+        progress(0.01, "Choosing the look of the pictures")
+        opening = " ".join(sec["text"] for sec in secs[:3])[:3500]
+        cast = "; ".join(f"{c['name']} ({c.get('gender', '')}, {c.get('age', '')})" for c in (p.get("cast") or [])[:12])
+        try:
+            look = ask_patiently(wc, LOOK_PROMPT.format(title=p["title"], opening=opening, cast=cast or "unknown"))
+        except Exception as e:
+            log(f"The writer couldn't choose a look ({str(e)[:100]})")
+            look = {}
+        p["look"] = {"visual_style": str(look.get("visual_style") or sm.DEFAULT_LOOK)[:300],
+                     "characters": str(look.get("characters") or "")[:700]}
+        save_project(d, p)
+    extra = ("Grown-up story: everyone is an adult and fully clothed; never anything sexual." if p["level"] in
+             ("mature", "explicit") else "")
+    todo = [i for i, sec in enumerate(secs) if not sec.get("image_prompt")]
+    for n0 in range(0, len(todo), 8):                       # eight sections per question
+        batch = todo[n0:n0 + 8]
+        progress(0.02 + 0.08 * n0 / max(1, len(todo)), f"Planning the pictures: {n0 + len(batch)} of {len(todo)} sections")
+        listed = "\n\n".join(f"{k + 1}. {secs[i]['text'][:900]}" for k, i in enumerate(batch))
+        try:
+            got = ask_patiently(wc, SHOTS_PROMPT.format(title=p["title"], style=p["look"]["visual_style"], extra=extra,
+                                                        n=len(batch), sections=listed)).get("pictures") or []
+        except Exception as e:
+            log(f"Picture ideas skipped for a few sections ({str(e)[:100]})")
+            got = []
+        d, p, s = load_project(cfg, pid)
+        secs = book_scenes(p)
+        for k, i in enumerate(batch):
+            idea = str(got[k]).strip() if k < len(got) else ""
+            if not idea:                                       # the writer missed one: a calm sentence from the text
+                calm = [x for x in sm.split_sentences(secs[i]["text"]) if "“" not in x and len(x.split()) >= 6]
+                idea = calm[0] if calm else secs[i]["text"][:200]
+            secs[i]["image_prompt"] = idea[:400]
+        save_project(d, p)
+    return p
+
+
+def run_video(cfg, pid, progress=lambda f, t: None):
+    """Pictures for every section (drawn by the picture app on this Mac, or OpenAI or Gemini if set up) and a video
+    of the whole audiobook with them: each section's pictures last exactly as long as it's read, long sections get
+    more than one, and the video has subtitles. Also a picture book (PDF). A StoryMaker book reuses its pictures."""
+    d, p, s = load_project(cfg, pid)
+    rcfg = writer_cfg(cfg, p["level"])
+    provider = sm.pick_image_provider(rcfg)
+    if provider == "cards":
+        raise ValueError("Pictures need a picture app: open Draw Things, turn on Settings → API Server (HTTP, port "
+                         "7860) and set LOCAL_IMAGE_URL in storymaker.env (or an OpenAI or Gemini key).")
+    if len(recorded_chapters(d, p)) != len(p["chapters"]):
+        raise ValueError("Record the whole book first: the pictures are timed to the reading.")
+    p = plan_pictures(cfg, pid, progress)
+    secs = book_scenes(p)
+    story = {"title": p["title"], "level": p["level"], "logline": p.get("logline", ""),
+             "visual_style": p["look"]["visual_style"], "characters": p["look"]["characters"],
+             "user_style": p.get("user_style") or {}, "cast": [{"name": c["name"]} for c in p.get("cast") or []],
+             "scenes": [{"heading": next(ch["title"] for ch in p["chapters"] if sec in ch["sections"]),
+                         "narration": sec["text"], "image_prompt": sec.get("image_prompt", ""), "shot_planned": True}
+                        for sec in secs]}
+    pics_dir = d / "pictures"
+    pics_dir.mkdir(exist_ok=True)
+    src = p.get("source") or {}
+    if src.get("type") == "storymaker":                      # StoryMaker's own pictures, where it has them
+        folder = Path(cfg["SM_LIBRARY"]) / src["id"]
+        for f_ in folder.glob("scene_*.png"):
+            if not (pics_dir / f_.name.replace("scene_", "pic_")).exists():
+                shutil.copy(f_, pics_dir / f_.name.replace("scene_", "pic_"))
+    work = d / "work" / "video"
+    shutil.rmtree(work, ignore_errors=True)
+    old_report = sm.report
+
+    def report(step, frac=0.0, detail=None, image=None, **extra):
+        if detail:
+            progress(0.1 + 0.85 * max(0.0, min(1.0, frac)), detail)
+    sm.report = report                                     # StoryMaker's progress lines show in the studio
+    try:
+        full, timeline = book_timeline(d, p, work)
+        slices = sm.slice_segments(full, timeline, work)
+        tmp = work / "build"
+        tmp.mkdir(parents=True, exist_ok=True)
+        _, pics, seg_lens = sm.make_video(rcfg, story, slices, pics_dir, tmp, 1920, 1080, False,
+                                          tmp / "story.mp4", "slideshow", None)
+        out = d / "out"
+        shutil.copy(tmp / "story.mp4", out / "story.mp4")
+        texts, spans = sm.subtitle_lines(timeline, seg_lens, p["title"])   # line by line, on the video's clock
+        if texts:
+            sm.write_subtitles(texts, spans, out / "story.srt", out / "story.vtt")
+            sm.burn_subtitles(rcfg, out / "story.mp4", out / "story.srt")
+        progress(0.97, "Laying out the picture book")
+        try:
+            imgs = [pics.get(i) or pics_dir / f"pic_{i + 1:02d}.png" for i in range(len(secs))]
+            sm.make_book(story, imgs, out / "cover.jpg" if (out / "cover.jpg").exists() else None,
+                         out / "picture-book.pdf")
+        except Exception as e:
+            log(f"Picture book skipped ({e})")
+    finally:
+        sm.report = old_report
+        shutil.rmtree(work, ignore_errors=True)
+    d, p, s = load_project(cfg, pid)
+    p["video_made"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    save_project(d, p)

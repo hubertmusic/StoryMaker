@@ -673,3 +673,49 @@ Press **Style** at the top of StoryMaker to teach it your taste.
   2. In `~/StoryMaker/storymaker.env`: `LOCAL_IMAGE_URL=http://host.docker.internal:7860`.
      For SDXL Turbo or Lightning models, also `LOCAL_IMAGE_STEPS=4` and `LOCAL_IMAGE_CFG=1.5`.
   3. `cd ~/StoryMaker && docker compose up -d`. The Video choice and the picture book then work for Explicit.
+
+## 16. Better writing, real illustrations
+
+- **No more broken sentences.** The local writer's settings no longer punish it for reusing everyday words. That
+  punishment is what made it drop "the", "to" and "was" and write fragments like "she wanted love be happy stir
+  trouble". Any sentence that still comes out like that is caught (it has lost all its small words, or trails off
+  in "…" pieces) and sent back to be rewritten as a complete idea.
+- **One point of view.** The first scene decides first person ("I") or third person (or your choice under More
+  options), and every later scene is held to it. A scene that switches is written again, and a narration line
+  that slips into "I" in a third-person story is fixed.
+- **No repeats, no padding.** A scene that repeats an earlier one is thrown away and written again with "what
+  happens next". The writer is told to keep things moving and never to pad. A word used five times or more in one
+  scene is flagged and varied. Part 2 of a series picks up where part 1 ended instead of retelling it.
+- **Rewrite with AI** keeps the same events, people, order and outcome, in new sentences. Each try is checked: if
+  it copied too much of the old wording, or lost the characters (went off topic), it's written again.
+- **Videos show real illustrations.** Before drawing, the writer reads each finished scene and describes one
+  illustration of its most telling moment: which characters, exactly what each is doing (mid-action), their
+  expressions, where, the light. Draw Things draws that in the story's look (a storybook style unless you set one
+  in Style → Pictures), with the same characters throughout. Long scenes get several pictures of different
+  moments, picking sentences where someone is doing something.
+- **No more text on the pictures.** The whole scene's text used to be drawn over the picture and ran off the
+  screen. Now subtitles appear a line at a time, as they're spoken, always inside the frame (`CAPTIONS=on`;
+  `off` leaves them only as the switchable subtitle track).
+- **Draw Things must be on.** If it isn't answering, the story stops with a message instead of filling the video
+  with title cards. Open it and press **Make it again**: nothing already made is redone.
+- **Older stories:** in **Remake the audio**, tick **Draw new pictures** to replace a video's (and picture book's)
+  pictures with new illustrations.
+
+## 17. Ready checks (and Draw Things opens by itself)
+
+Before a story starts, StoryMaker checks it has everything it needs, and the price check shows the list:
+- **Writer:** Groq answers with your key, or Ollama is running and has your model (Explicit). If Ollama is closed,
+  it's opened.
+- **Voices:** Kokoro's voice files are there (or will download the first time).
+- **Pictures** (video or picture book): Draw Things answers. **If it's closed, StoryMaker opens it and waits for
+  it.** With no picture app set up at all, it tells you rather than making a video of title cards.
+- **Sounds:** Freesound key or your own sounds folder (a note only, it never stops a story).
+- **Disk space:** at least 3 GB free.
+
+Anything marked ✕ stops the story before anything is spent or written, with what to do. The same check runs
+when a cut-off story is carried on, and Draw Things is opened again in the middle of a story if it was closed.
+
+How the opening works: StoryMaker runs inside Docker and can't open Mac apps, so it asks Audio Studio (which
+runs on the Mac) to. The two share a private key in StoryMaker's library folder, so nothing else can ask. Audio
+Studio must be running (it starts by itself a few minutes after the Mac starts). In Draw Things, turn on Settings
+→ API Server (HTTP, port 7860) once; it stays on after that.

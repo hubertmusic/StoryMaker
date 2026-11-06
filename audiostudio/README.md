@@ -79,8 +79,19 @@ Step 5, **Listen**, has these downloads:
   also has a Download link in step 4.
 - **Send to StoryMaker** (for books that came from StoryMaker): the story in your StoryMaker library then
   plays and downloads this audiobook, with matching subtitles. StoryMaker's earlier audio is kept in a backup
-  folder inside the story. A video keeps its own soundtrack. Remaking the audio in StoryMaker later replaces
-  it again.
+  folder inside the story. **If the story has a video,** it's made again around this reading: the same pictures
+  (or clips), nothing drawn again, each scene's pictures on screen exactly while that scene is read now, with new
+  subtitles. The old video is kept as `story.before.mp4`. The picture book (PDF) has no sound, so it stays as it
+  is. Remaking the audio in StoryMaker later replaces it again.
+- **Pictures and a video** (any book: a file, a PDF, pasted text, a free book): once the whole book is recorded,
+  **Make pictures and a video** draws a picture for every section with Draw Things on your Mac (or OpenAI or
+  Gemini, if you've set a key). The AI first chooses one look for the whole book (style, and each character's
+  appearance) and a picture idea for each section, so the pictures stay consistent. Long sections get a new
+  picture every 40 seconds or so. The video plays the audiobook with the pictures, each on screen exactly while
+  its part is read, with subtitles. There's also a picture book (PDF). Pictures already drawn are kept, so
+  making it again after re-recording is quick and nothing is drawn twice. A book from StoryMaker reuses
+  StoryMaker's pictures. Mature and Explicit books get tasteful pictures only: everyone is an adult and fully
+  clothed.
 
 ## Acting and speed
 

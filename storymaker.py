@@ -150,7 +150,7 @@ DEFAULTS = {
     "PROOFREAD": "on",                     # a copy editor's pass over every scene: spelling, grammar, clear dialogue
     "ADULT_CONTENT": "off",                # on = allow the Explicit (18+) level (local Ollama only)
     "OLLAMA_ADULT_MODEL": "dolphin3",      # the local model used for Explicit stories
-    "OLLAMA_TEMPERATURE": "0.9",           # livelier writing; lower = safer, plainer
+    "OLLAMA_TEMPERATURE": "0.8",           # livelier writing; lower = safer, plainer
     "OLLAMA_KEEP_ALIVE": "30s",            # free the writer's memory soon after, for voices and pictures
 
     "SOUNDSCAPES": "on",                   # background sound + sound effects that fit each scene
@@ -191,8 +191,10 @@ DEFAULTS = {
     "PUBLIC_BASE_URL": "",
     "MEDIA_BASE_URL": "",                  # web page: links to files where the web page serves OUTPUT_DIR
     "SUBTITLES": "on",
-    "CAPTIONS": "on",
+    "CAPTIONS": "on",                      # subtitles burned into the video, line by line as spoken (off = only the
+                                           # switchable subtitle track)
     "MOTION": "on",
+    "STUDIO_HELPER_URL": "http://host.docker.internal:8096",   # Audio Studio, which opens Draw Things/Ollama for us
     "MORE_PICTURES": "on",                 # video with free local pictures: long scenes get a new picture every
     "SECONDS_PER_PICTURE": "40",           # this many seconds, of a later moment in the scene
 }
@@ -381,8 +383,12 @@ The story plan, chapter by chapter:
 This is chapter {n} of {total}, "{chapter_title}": {summary}
 This is scene {k} of {scenes} in this chapter. What happens in this scene: {beat}
 {previous}{keywords}
-Write this scene now as finished story prose of about {words} words. Make it long, rich and detailed:
-the setting and the senses, what the characters think and feel, and plenty of dialogue between them.
+Write this scene now as finished story prose of about {words} words. Keep it moving: every paragraph shows
+something new happening. Use telling details of the place and the senses, what the characters think and feel,
+and plenty of dialogue, but never pad: no restating what the reader already knows, no summing up feelings you've
+already shown, no long lists of description. {pov}
+Don't repeat or retell anything from earlier scenes, chapters or earlier parts of the series: pick up where the
+story so far ends and move it on. Every sentence is a complete, clear thought.
 {extra}Put every spoken line in double quotation marks with a speech tag that names who is speaking,
 like: “Wait for me,” Mira said. Start a new paragraph whenever the speaker changes.
 Write only the scene itself: no title, no heading, no notes, nothing before or after the story text.
@@ -392,9 +398,10 @@ CONTINUE_PROMPT = """Here is a scene from the story "{title}" ({genre}, for {aud
 
 {text}
 
-Continue this same scene from exactly where it stops. Add about {more} more words of detailed prose
-and dialogue (spoken lines in double quotation marks with a speech tag). {extra}Write only the
-continuation, with no heading or notes, and don't repeat what is already written."""
+Continue this same scene from exactly where it stops, moving its events forward. Add about {more} more words of
+prose and dialogue (spoken lines in double quotation marks with a speech tag), in the same point of view and
+tense. {extra}Write only the continuation, with no heading or notes, and don't repeat or restate anything that's
+already written."""
 
 CHAPTER_PROMPT = """You are a master storyteller writing chapter {n} of {total} of the story "{title}".
 It will be read aloud by a narrator (each character's spoken lines voiced by its own actor) and shown
@@ -519,8 +526,11 @@ def ask_writer(cfg, prompt, as_json=True, system=None):
                                         "keep_alive": cfg.get("OLLAMA_KEEP_ALIVE", "30s"),
                                         "options": {"num_ctx": 12288, "num_predict": 8000,
                                                     **({} if as_json else {
-                                                        "temperature": float(cfg.get("OLLAMA_TEMPERATURE") or 0.9),
-                                                        "top_p": 0.95, "repeat_penalty": 1.12, "repeat_last_n": 256})},
+                                                        # a strong penalty on repeating words makes small models drop
+                                                        # "the", "to", "was"… and write word salad: keep it light
+                                                        "temperature": min(0.85, float(cfg.get("OLLAMA_TEMPERATURE") or 0.8)),
+                                                        "top_p": 0.92, "min_p": 0.05,
+                                                        "repeat_penalty": 1.05, "repeat_last_n": 64})},
                                         "messages": msgs},
                                   timeout=1800)
             except requests.ConnectionError:
@@ -747,6 +757,27 @@ _REPEAT_OK = {"had", "that", "very", "no", "so", "bye", "ha", "knock", "tick", "
 _SPELL = None
 
 
+FIRST_PERSON = re.compile(r"\b(I|I'm|I'd|I'll|I've|me|my|mine|myself)\b")
+
+
+def narration_only(text):
+    return re.sub(r"“[^”]*”|\"[^\"]*\"", " ", text or "")
+
+
+def detect_pov(texts):
+    """"first" when the narration (not the dialogue) says "I", otherwise "third"."""
+    bare = narration_only(" ".join(texts))
+    words = max(1, len(bare.split()))
+    return "first" if len(FIRST_PERSON.findall(bare)) * 100 / words > 1.2 else "third"
+
+
+def pov_rule(pov):
+    return ("Tell it in the first person (\"I\"), from the main character's point of view, in the past tense, all the "
+            "way through." if pov == "first" else
+            "Tell it in the third person (\"she\", \"he\", \"they\"), in the past tense, all the way through: the "
+            "narration never says \"I\" (only characters do, inside quotes).")
+
+
 def split_sentences(text):
     """The sentences of a passage, in order (keeps the dialogue tags with their quotes)."""
     out = []
@@ -805,7 +836,23 @@ def tidy_sentences(text):
     return "\n".join(lines)
 
 
-def sentence_issues(text, names=()):
+GLUE = {"the", "a", "an", "of", "to", "in", "on", "at", "for", "with", "from", "by", "into", "onto", "her", "his",
+        "their", "my", "your", "our", "its", "was", "were", "is", "had", "has", "be", "been", "that", "this"}
+COMMON_LONG = {"before", "around", "something", "through", "thought", "looked", "another", "little", "turned",
+               "nothing", "against", "between", "without", "everything", "himself", "herself", "toward", "towards",
+               "because", "behind", "inside", "outside", "moment", "couldn", "wouldn", "didn", "wasn", "really"}
+
+
+def garbled(sentence):
+    """A sentence that has lost its little words ("she wanted love be happy stir trouble") or trails off in pieces."""
+    bare = narration_only(sentence)
+    words = re.findall(r"[A-Za-z']+", bare)
+    if len(words) >= 9 and not ({w.lower() for w in words} & GLUE):
+        return True
+    return len(re.findall(r"\.\.\.|…", bare)) >= 2 and len(words) >= 6
+
+
+def sentence_issues(text, names=(), pov=""):
     """Badly built sentences, by rule. Returns a list of (sentence, problem). Fiction is allowed its style, so
     only clear problems are listed: very long or run-on sentences, comma splices, the same word twice in a row,
     unbalanced quotes, the same sentence twice, three openers in a row, a lowercase start, likely misspellings."""
@@ -838,6 +885,12 @@ def sentence_issues(text, names=()):
             issues.append((s, "starts with a lowercase letter"))
         if re.match(r"^(?:Because|Although|Whereas|Though)\b", s) and "," not in s and n < 14 and not s.startswith("“"):
             issues.append((s, "a fragment: it starts like the first half of a sentence and stops"))
+        if garbled(s):
+            issues.append((s, "garbled: words are missing and it doesn't read as a complete idea; rewrite it as a "
+                              "full, clear sentence that says what it means"))
+        if pov == "third" and FIRST_PERSON.search(narration_only(s)):
+            issues.append((s, "the narration slips into the first person ('I'): this story is told in the third "
+                              "person; keep 'I' only inside quotes"))
         key = re.sub(r"\W+", " ", s.lower()).strip()
         if n >= 6 and key in seen:
             issues.append((s, "the same sentence appears twice in the scene; remove or change one"))
@@ -849,6 +902,13 @@ def sentence_issues(text, names=()):
                 issues.append((s, f"the third sentence in a row that starts with '{words[0]}': vary the openings"))
         else:
             run_word, run_len = first, 1
+    counts = {}
+    for w in re.findall(r"[a-z]{6,}", narration_only(text).lower()):
+        counts[w] = counts.get(w, 0) + 1
+    for w, c in sorted(counts.items(), key=lambda kv: -kv[1])[:3]:
+        if c >= 5 and w not in names_l and w not in COMMON_LONG:
+            first = next((x for x in sents if w in x.lower()), w)
+            issues.append((first, f"the word '{w}' is used {c} times in this scene: vary it or cut some"))
     for para in re.split(r"\n\s*\n", text or ""):
         if para.count("“") != para.count("”"):
             issues.append((para.strip()[:220], "this paragraph opens and closes quotes a different number of times"))
@@ -884,13 +944,13 @@ inside “double quotes”. Reply with only the corrected passage.
 ---"""
 
 
-def fix_sentences(cfg, text, system=None, names=(), rounds=2, extra=""):
+def fix_sentences(cfg, text, system=None, names=(), rounds=2, extra="", pov=""):
     """Rule check, then targeted fixes by the writer, up to `rounds` times. Never makes it worse: a fix is kept only
     when it has fewer problems and about the same length."""
     text = tidy_sentences(text)
     if cfg.get("PROOFREAD", "on") != "on" or cfg["STORY_PROVIDER"].lower() == "demo" or len(text.split()) < 40:
         return text
-    issues = sentence_issues(text, names)
+    issues = sentence_issues(text, names, pov)
     for _ in range(rounds):
         if not issues:
             break
@@ -903,7 +963,7 @@ def fix_sentences(cfg, text, system=None, names=(), rounds=2, extra=""):
             break
         new = tidy_sentences(new)
         a, b = len(text.split()), len(new.split())
-        left = sentence_issues(new, names)
+        left = sentence_issues(new, names, pov)
         if not (0.85 * a <= b <= 1.2 * a) or len(left) >= len(issues):
             break
         text, issues = new, left
@@ -1119,7 +1179,7 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
             report("writing", 0.97, f"Proofreading scene {i + 1} of {len(story['scenes'])}")
             text = proofread(cfg, sc.get("narration", ""), system)
             report("writing", 0.98, f"Checking sentence structure: scene {i + 1} of {len(story['scenes'])}")
-            text = fix_sentences(cfg, text, system, names)
+            text = fix_sentences(cfg, text, system, names, pov=story.get("pov") or "")
             if level == "explicit":
                 try:
                     text = adult_guard(cfg, text, system)
@@ -1548,6 +1608,34 @@ def lines_from_prose(text, cast):
     return out
 
 
+def shingles(text, n=5):
+    w = re.findall(r"[a-z']+", (text or "").lower())
+    return {" ".join(w[i:i + n]) for i in range(max(0, len(w) - n + 1))}
+
+
+def scene_problems(text, earlier, pov):
+    """What's wrong enough with a freshly written scene to write it again: it repeats an earlier scene, it's word
+    salad, or it's told from the wrong point of view. Returns a note for the writer ("" if it's fine)."""
+    notes = []
+    sh = shingles(text)
+    for k_, old in enumerate(earlier[-12:]):
+        o = shingles(old)
+        if sh and o and len(sh & o) / max(1, min(len(sh), len(o))) > 0.2:
+            notes.append("The last attempt repeated a scene that already happened. Write only what happens NEXT, "
+                         "with new events and new words.")
+            break
+    sents = split_sentences(text)
+    bad = sum(1 for x in sents if garbled(x))
+    if sents and bad / len(sents) > 0.08:
+        notes.append("The last attempt had broken sentences with missing words. Write in plain, complete, "
+                     "grammatical sentences.")
+    if pov:
+        other = detect_pov([text])
+        if other != pov:
+            notes.append("The last attempt switched point of view. " + pov_rule(pov))
+    return " ".join(notes)
+
+
 def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, chapters, words, job, level):
     """Long and detailed stories: plan the chapters and scenes, then write every scene on its own as
     plain prose (far longer and better from small local models than one big JSON reply). Short scenes
@@ -1593,6 +1681,7 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
     fmt = dict(title=outline.get("title", ""), genre=genre, audience=audience, rules=rules)
 
     all_scenes, so_far, total = [], "", chapters * scenes
+    pov = outline.get("pov") or (cfg.get("_PREFS") or {}).get("pov") or ""
     for k, ch in enumerate(chs, 1):
         for j, beat in enumerate(ch["scenes"], 1):
             done = len(all_scenes)
@@ -1608,12 +1697,14 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
             else:
                 prev = (f"\nThe story so far ends like this:\n…{so_far[-1500:]}\n" if so_far else
                         "\nThis is the very beginning of the story.\n")
-                for fresh in range(3):                    # explicit: a scene that goes wrong is written again
-                    text = clean_prose(ask_writer(cfg, SCENE_PROMPT.format(
+                redo_note = ""
+                for fresh in range(3):                    # a scene that goes wrong is written again
+                    wcfg = dict(cfg, OLLAMA_TEMPERATURE="0.6") if redo_note else cfg     # calmer the second time
+                    text = clean_prose(ask_writer(wcfg, SCENE_PROMPT.format(
                         **fmt, characters=outline.get("characters", ""), plan=plan, n=k, total=chapters,
                         chapter_title=ch.get("title", ""), summary=ch.get("summary", ""), k=j, scenes=scenes,
-                        beat=beat, previous=prev, words=target,
-                        extra=extra + (ADULT_REDO if fresh else ""),
+                        beat=beat, previous=prev, words=target, pov=pov_rule(pov) if pov else "",
+                        extra=extra + (ADULT_REDO if fresh and adult else "") + (redo_note + " " if redo_note else ""),
                         keywords=keywords_block(cfg.get("_KEYWORDS"), so_far, last=done == total - 1)),
                         as_json=False, system=system))
                     for _ in range(3):                        # too short? ask it to keep going
@@ -1628,6 +1719,16 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
                         if len(more.split()) < 20:
                             break
                         text = text.rstrip() + "\n\n" + more
+                    if not pov:                               # the first scene sets the point of view for the rest
+                        pov = detect_pov([text])
+                        outline["pov"] = pov
+                        if plan_file:
+                            plan_file.write_text(json.dumps(outline, indent=2))
+                    redo_note = scene_problems(text, [x["narration"] for x in all_scenes], pov) if fresh < 2 else ""
+                    if redo_note:
+                        log(f"Chapter {k}, scene {j} written again: {redo_note[:120]}")
+                        report("writing", 0.03 + 0.97 * done / total, f"Writing chapter {k}, scene {j} again (better)")
+                        continue
                     if not adult:
                         break
                     try:
@@ -1665,7 +1766,9 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
                 title=outline.get("title", ""), genre=genre, audience=audience, rules=rules,
                 characters=outline.get("characters", ""), context="", text=sc["narration"],
                 instructions=f"Keep the scene as it is, but naturally work in these words and phrases: {', '.join(ks)}.",
-                keywords="", words=len(sc["narration"].split()), extra=extra), as_json=False, system=system))
+                keywords="", words=len(sc["narration"].split()), extra=extra,
+                fresh="Change as little as you need to.", pov=pov_rule(pov) if pov else ""),
+                as_json=False, system=system))
             if len(new.split()) > 0.6 * len(sc["narration"].split()):
                 if adult:
                     try:
@@ -1674,7 +1777,7 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
                         continue                            # keep the scene as it was
                 sc["narration"], sc["lines"] = new, lines_from_prose(new, cast)
     story = {k_: outline.get(k_, "") for k_ in ("title", "logline", "visual_style", "characters")}
-    story.update(cast=cast, scenes=all_scenes)
+    story.update(cast=cast, scenes=all_scenes, pov=pov or detect_pov([x["narration"] for x in all_scenes]))
     if chapters > 1:
         story["chapters"] = [{"number": i + 1, "title": c.get("title", "")} for i, c in enumerate(chs)]
     return story
@@ -1880,6 +1983,53 @@ def story_seed(story, extra=0):
     return (int(hashlib.sha1(str(story.get("title", "")).encode()).hexdigest()[:7], 16) + extra) % 2_000_000_000
 
 
+ILLUSTRATE = ("illustrated scene with the characters in action: full figures, expressive faces and body language, "
+              "a clear moment of action, dynamic composition, storybook illustration")
+DEFAULT_LOOK = "vivid storybook illustration, expressive characters, ink and watercolour, rich colour, warm light"
+
+SHOT_PLAN_PROMPT = """You are the illustrator of the story "{title}". Look of every picture: {style}.
+The characters always look like this: {characters}
+For each numbered scene below, describe ONE illustration of its most dramatic or telling moment: which characters
+are in it (by name), exactly what each is doing (a clear action, mid-movement: running, reaching, laughing,
+arguing, embracing), their expressions, where they are, and the light. One sentence of 25 to 45 words. Only
+things a picture can show; no words or signs in the picture. {extra}
+Reply with ONLY JSON: {{"pictures": ["...", "..."]}} with exactly {n} entries, in order.
+
+{scenes}"""
+
+
+def plan_shots(cfg, story):
+    """Before drawing: an illustration idea for every scene, written from the finished scene itself (who is there,
+    doing what), so the pictures show the characters acting out the story, not an empty place or the plot summary.
+    Asked once per scene (kept in the story); a scene the writer misses keeps its first idea."""
+    if cfg["STORY_PROVIDER"].lower() == "demo":
+        return
+    scenes = story.get("scenes") or []
+    todo = [i for i, sc in enumerate(scenes) if not sc.get("shot_planned")]
+    level = story.get("level", "family")
+    extra = ("Grown-up story: everyone is an adult and fully clothed; show the mood (a look, a touch of hands, a "
+             "kiss at most), never anything sexual." if level in ("mature", "explicit") else
+             "Keep it gentle and friendly for children." if level in ("young-kids", "kids") else "")
+    system = EXPLICIT_SYSTEM if level == "explicit" else None
+    for n0 in range(0, len(todo), 6):
+        batch = todo[n0:n0 + 6]
+        report("video", 0.0, f"Planning the illustrations: {n0 + len(batch)} of {len(todo)} scenes")
+        listed = "\n\n".join(f"{k + 1}. {scenes[i].get('narration', '')[:1100]}" for k, i in enumerate(batch))
+        try:
+            got = ask_writer(cfg, SHOT_PLAN_PROMPT.format(
+                title=story.get("title", ""), style=story.get("visual_style") or DEFAULT_LOOK,
+                characters=story.get("characters", ""), extra=extra, n=len(batch), scenes=listed), system=system)
+            got = got.get("pictures") if isinstance(got, dict) else []
+        except Exception as e:
+            log(f"Illustration ideas skipped for a few scenes ({str(e)[:100]})")
+            got = []
+        for k, i in enumerate(batch):
+            idea = str(got[k]).strip() if isinstance(got, list) and k < len(got) else ""
+            if len(idea.split()) >= 8:
+                scenes[i]["image_prompt"] = idea[:500]
+            scenes[i]["shot_planned"] = True
+
+
 def shot_prompt(story, scene, kind, base=None, local=False):
     base = base or scene.get("video_prompt" if kind == "video" else "image_prompt") or scene.get("image_prompt", "")
     level = story.get("level", "family")
@@ -1902,7 +2052,8 @@ def shot_prompt(story, scene, kind, base=None, local=False):
             base = picture_safe(f"{scene.get('heading', '')}, {story.get('logline', '')}", level) or "a quiet moment"
         base = "Fully clothed adults, " + base.rstrip(" .") + ". Romantic, atmospheric, cinematic"
     if local:          # picture apps read the start of a prompt most closely: the shot first, then who and the look
-        return f"{base}. {chars}. {look}.{tail}"
+        look = look or DEFAULT_LOOK
+        return f"{base.rstrip(' .')}. {ILLUSTRATE}. Characters: {chars}. {look}.{tail}"
     return f"Style: {look}. Characters: {chars}. Shot: {base}.{tail}"
 
 
@@ -1918,7 +2069,8 @@ TASTEFUL_NEG = ("nude, nudity, naked, nsfw, explicit, sexual, nipples, genitals,
 def local_image(cfg, prompt, w, h, out_path, level="family", seed=-1):
     """A picture from the image app on your own computer (Draw Things, or Automatic1111/Forge):
     its txt2img API. Free and private. Grown-up stories only ever get tasteful pictures."""
-    neg = "text, letters, words, watermark, signature, blurry, deformed, extra fingers, bad anatomy"
+    neg = ("text, letters, words, caption, title, speech bubble, watermark, signature, logo, blurry, deformed, extra "
+           "fingers, extra limbs, bad anatomy, empty scene")
     avoid = (((cfg.get("_STYLE") or {}).get("pictures") or {}).get("avoid") or "").strip()
     if avoid:
         neg += ", " + _clip(avoid, 200)
@@ -2078,7 +2230,8 @@ def make_character_ref(cfg, story, job):
 
 def picture_for(cfg, story, i, w, h, portrait, job, provider, ref):
     out = job / f"pic_{i + 1:02d}.png"
-    if out.exists():
+    card = out.with_suffix(".card")                 # a title card stood in last time: try drawing it again
+    if out.exists() and not (card.exists() and provider != "cards"):
         return out
     sc = story["scenes"][i]
     raw = job / f"raw_{i + 1:02d}.png"
@@ -2091,9 +2244,11 @@ def picture_for(cfg, story, i, w, h, portrait, job, provider, ref):
             local_picture(cfg, story, shot_prompt(story, sc, "image", local=True), portrait, raw, story_seed(story))
         else:
             title_card(sc.get("heading", ""), w, h, raw, i)
+        card.unlink(missing_ok=True)
     except Exception as e:
         log(f"Picture {i + 1} failed ({e}); using a title card.")
         title_card(sc.get("heading", ""), w, h, raw, i)
+        card.write_text("1")
     fit_cover(Image.open(raw), w, h).save(out)
     raw.unlink(missing_ok=True)
     return out
@@ -2142,11 +2297,151 @@ def scene_moments(story, i, n):
              and len(s_.split()) >= 6]
     if level in ("mature", "explicit"):
         sents = [s_ for s_ in sents if not PICTURE_UNSAFE.search(s_)]
+    names = [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict) and c.get("name")]
+    acting = lambda x: (any(nm in x for nm in names) or re.search(r"^(?:She|He|They)\b", x)) and \
+        re.search(r"\b\w+ed\b|\b(?:ran|took|held|threw|caught|fell|stood|sat|turned|grabbed|pulled|pushed|"
+                  r"kissed|hugged|laughed|cried|reached|opened|climbed|jumped|danced|fought)\b", x)
     out = []
-    for k in range(1, n):
+    for k in range(1, n):        # in each part of the scene, a sentence where someone does something, if there is one
         part = [s_ for j, s_ in enumerate(sents) if k / n <= (j + 0.5) / max(1, len(sents)) < (k + 1) / n]
-        out.append(part[0] if part else "")
+        out.append(next((x for x in part if acting(x)), part[0] if part else ""))
     return out
+
+
+def local_image_ready(cfg, timeout=8):
+    try:
+        requests.get(cfg["LOCAL_IMAGE_URL"].rstrip("/") + "/", timeout=timeout)
+        return True
+    except requests.RequestException:
+        return False
+
+
+def ollama_ready(cfg, timeout=6):
+    try:
+        r = requests.get(cfg["OLLAMA_URL"].rstrip("/") + "/api/tags", timeout=timeout)
+        return [m.get("name", "") for m in (r.json() or {}).get("models") or []]
+    except (requests.RequestException, ValueError):
+        return None
+
+
+# Mac apps StoryMaker can ask to be opened: the picture app and the local writer
+MAC_APPS = {"draw-things": "Draw Things", "ollama": "Ollama"}
+
+
+def open_mac_app(cfg, app):
+    """Open Draw Things (or Ollama) when it's needed and closed. StoryMaker runs inside Docker and can't open Mac
+    apps itself, so it asks Audio Studio (which runs on the Mac) to; run straight on a Mac, it opens it directly.
+    Waits until the app answers. Returns (ok, what happened)."""
+    ready = (lambda: local_image_ready(cfg, 4)) if app == "draw-things" else (lambda: ollama_ready(cfg, 4) is not None)
+    if ready():
+        return True, "already open"
+    name = MAC_APPS[app]
+    if sys.platform == "darwin":
+        if subprocess.run(["open", "-g", "-a", name], capture_output=True).returncode != 0:
+            return False, f"{name} isn't installed on this Mac"
+    else:
+        tok = Path(os.path.expanduser(cfg["OUTPUT_DIR"])) / ".helper-token"
+        url = (cfg.get("STUDIO_HELPER_URL") or "http://host.docker.internal:8096").rstrip("/") + "/api/helper/open"
+        if not tok.exists():
+            return False, f"{name} is closed, and Audio Studio isn't running to open it"
+        try:
+            r = requests.post(url, json={"app": app}, headers={"X-Helper-Token": tok.read_text().strip()}, timeout=150)
+            d = r.json()
+            return bool(d.get("ok")), d.get("detail") or d.get("error") or ""
+        except (requests.RequestException, ValueError):
+            return False, f"{name} is closed, and Audio Studio isn't answering to open it"
+    for _ in range(45):                                    # it takes a moment to start its server
+        time.sleep(2)
+        if ready():
+            return True, f"opened {name}"
+    return False, f"{name} opened but isn't answering: is its API server on?"
+
+
+DRAW_THINGS_FIX = ("Open Draw Things once and turn on Settings → API Server (HTTP, port 7860); it stays on after that. "
+                   "From then on StoryMaker opens Draw Things by itself when a story needs pictures.")
+
+
+def preflight(cfg, args, level, vprovider, auto=True):
+    """Everything a story needs, checked before it starts: the writer, the voices, the picture app (opened if it's
+    closed), the sounds and the disk. Returns [{"item", "ok", "detail", "fix", "blocking"}]."""
+    out = []
+    add = lambda item, ok, detail, fix="", blocking=True: out.append(
+        {"item": item, "ok": ok, "detail": detail, "fix": fix, "blocking": blocking and not ok})
+    prov = cfg["STORY_PROVIDER"].lower()
+    if prov == "demo":
+        add("Writer", True, "demo writer")
+    elif prov == "groq":
+        if not cfg.get("GROQ_API_KEY"):
+            add("Writer", False, "No Groq key", "Add GROQ_API_KEY to ~/StoryMaker/storymaker.env.")
+        else:
+            try:
+                r = requests.get("https://api.groq.com/openai/v1/models", timeout=8,
+                                 headers={"Authorization": f"Bearer {cfg['GROQ_API_KEY']}"})
+                add("Writer", r.status_code == 200, "Groq is ready" if r.status_code == 200 else
+                    f"Groq said no ({r.status_code})", "Check GROQ_API_KEY in storymaker.env (make a new key at "
+                    "console.groq.com if needed)." if r.status_code in (401, 403) else "Try again in a minute.")
+            except requests.RequestException:
+                add("Writer", False, "Can't reach Groq", "Check the internet connection (and turn off the work VPN).")
+    elif prov == "ollama":
+        names = ollama_ready(cfg)
+        if names is None and auto:
+            ok, what = open_mac_app(cfg, "ollama")
+            names = ollama_ready(cfg) if ok else None
+        want = cfg["OLLAMA_MODEL"]
+        if names is None:
+            add("Writer", False, "Ollama isn't running", "Open the Ollama app on the Mac.")
+        elif not any(n == want or n.split(":")[0] == want.split(":")[0] for n in names):
+            add("Writer", False, f"Ollama doesn't have the model {want}", f"In Terminal: ollama pull {want}")
+        else:
+            add("Writer", True, f"Ollama is ready ({want})")
+    else:
+        key = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(prov)
+        add("Writer", bool(not key or cfg.get(key)), f"{prov} is set up" if not key or cfg.get(key) else f"No {key}",
+            f"Add {key} to storymaker.env." if key else "")
+    if args.mode != "story":
+        tts = cfg["TTS_PROVIDER"].lower()
+        if tts == "kokoro" or (tts == "auto" and local_tts() == "kokoro"):
+            d = Path(os.path.expanduser(cfg["KOKORO_DIR"]))
+            have = all((d / n).exists() for n in ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin"))
+            add("Voices", True, "Kokoro voices are ready" if have else "Kokoro voices will download first (one time)",
+                blocking=False)
+        else:
+            add("Voices", True, f"{tts} voices")
+    need_pics = (args.mode == "video" and vprovider in ("slideshow", "demo")) or args.book
+    if need_pics:
+        ip = pick_image_provider(cfg)
+        if ip == "local":
+            ok = local_image_ready(cfg)
+            what = "Draw Things is ready" if ok else "it's closed"
+            if not ok and auto:
+                ok, what = open_mac_app(cfg, "draw-things")
+                what = ("Draw Things wasn't open, so it was opened" if ok else what)
+            add("Pictures", ok, what if ok else f"Draw Things isn't answering ({what})", DRAW_THINGS_FIX)
+        elif ip == "cards":
+            add("Pictures", False, "No picture app is set up, so the video would only have title cards",
+                "Set up Draw Things (free, on the Mac): " + DRAW_THINGS_FIX + " Then set LOCAL_IMAGE_URL in "
+                "storymaker.env. Or make it as audio.")
+        else:
+            key = "OPENAI_API_KEY" if ip == "openai" else "GEMINI_API_KEY"
+            add("Pictures", bool(cfg.get(key)), f"{ip} pictures", f"Add {key} to storymaker.env.")
+    if args.mode == "video" and vprovider in ("omni", "veo"):
+        add("Video clips", bool(cfg.get("GEMINI_API_KEY")), "Gemini clips", "Add GEMINI_API_KEY to storymaker.env.")
+    if args.mode != "story" and cfg["SOUNDSCAPES"] == "on":
+        has_fs = bool(cfg.get("FREESOUND_API_KEY"))
+        add("Sounds", True, "Freesound and your sounds folder" if has_fs else
+            "Only your own sounds folder (no Freesound key)", "" if has_fs else
+            "For more sounds, add FREESOUND_API_KEY to storymaker.env.", blocking=False)
+    try:
+        free = shutil.disk_usage(os.path.expanduser(cfg["OUTPUT_DIR"])).free / 1e9
+        add("Disk space", free >= 3, f"{free:.0f} GB free", "Free up some space on the Mac (at least 3 GB).")
+    except OSError:
+        pass
+    return out
+
+
+def preflight_message(checks):
+    bad = [c for c in checks if c["blocking"]]
+    return " ".join(f"{c['item']}: {c['detail']}. {c['fix']}" for c in bad)
 
 
 def make_pictures(cfg, story, job, w, h, portrait, which, ref):
@@ -2154,6 +2449,19 @@ def make_pictures(cfg, story, job, w, h, portrait, which, ref):
     if not idxs:
         return {}
     provider = pick_image_provider(cfg)
+    step = (_PROG.get("status") or {}).get("step", "video")
+    lo = 0.0
+    if provider == "local" and any(not (job / f"pic_{i + 1:02d}.png").exists() or
+                                   (job / f"pic_{i + 1:02d}.card").exists() for i in idxs):
+        if not local_image_ready(cfg):
+            report(step, lo, "Opening Draw Things…")
+            ok, what = open_mac_app(cfg, "draw-things")
+            if not ok:
+                raise RuntimeError(f"Draw Things isn't answering ({what}), so the pictures can't be drawn. "
+                                   f"{DRAW_THINGS_FIX} Then press Make it again: everything already made is kept.")
+        plan_shots(cfg, story)
+    elif provider in ("openai", "gemini"):
+        plan_shots(cfg, story)
     log(f"Making {len(idxs)} picture(s) with {provider}…")
     step = (_PROG.get("status") or {}).get("step", "video")
     lo, hi = ((0.70, 0.80) if _PROG.get("clips") else (0.0, 0.80)) if step == "video" else (0.05, 0.85)
@@ -3727,12 +4035,7 @@ def produce_audio(cfg, story, job, out_dir, level, genre, music_choice, seed, sa
         audio_out = out_dir / "story.m4a"
         run(["ffmpeg", "-y", "-v", "error", "-i", str(final), "-c:a", "aac", "-b:a", "160k", str(audio_out)])
     if cfg["SUBTITLES"] == "on":
-        texts, spans = [], []
-        for seg in timeline["segments"]:
-            if seg["lines"]:
-                texts.append(story["title"] if seg["kind"] == "title" else story["scenes"][seg["index"]]["narration"])
-                a, b = seg["lines"][0]["start"], seg["lines"][-1]["end"]
-                spans.append((a, b - a))
+        texts, spans = subtitle_lines(timeline, None, story.get("title", ""))
         write_subtitles(texts, spans, out_dir / "story.srt", out_dir / "story.vtt")
     credit_file = out_dir / "sound-credits.txt"
     if credits:
@@ -3905,6 +4208,12 @@ def make_video(cfg, story, wavs, job, work, w, h, portrait, out_path, vprovider,
                 if p_:
                     extras.setdefault(i, []).append(p_)
 
+    for i, c in enumerate(clips):            # extra pictures kept from before (remaking the video for new audio)
+        if c is None and i not in extras:
+            found = sorted(job.glob(f"pic_{i + 1:02d}_[0-9].png"))
+            if found:
+                extras[i] = found
+
     log("Building the video…")
     segs = []
     cap = work / "cap_00.png"
@@ -3913,7 +4222,7 @@ def make_video(cfg, story, wavs, job, work, w, h, portrait, out_path, vprovider,
     still_segment(cfg, title_pic, cap, wavs[0], segs[-1], w, h)
     for i, sc in enumerate(scenes):
         cap = work / f"cap_{i + 1:02d}.png"
-        caption_overlay(sc["narration"] if cfg["CAPTIONS"] == "on" else "", w, h, cap)
+        caption_overlay("", w, h, cap)       # pictures stay clean: words come as timed subtitles, line by line
         segs.append(work / f"seg_{i + 1:02d}.mp4")
         if clips[i]:
             clip_segment(cfg, clips[i], cap, wavs[i + 1], segs[-1], w, h)
@@ -4119,6 +4428,40 @@ def stamp(t, vtt=False):
 
 def wrap_two(text, width=42):
     return "\n".join(textwrap.wrap(text, width)[:3])
+
+
+def subtitle_lines(timeline, seg_lens=None, title=""):
+    """Subtitles line by line, each shown while it's spoken. seg_lens: the video's own segment lengths (it adds a
+    short breath after each part), so the times follow the video; without them, the audio's clock."""
+    texts, spans, at = [], [], 0.0
+    for n_, seg in enumerate(timeline["segments"]):
+        for ln in seg.get("lines") or []:
+            text = str(ln.get("text") or "").strip() or (title if seg["kind"] == "title" else "")
+            if not text:
+                continue
+            start = (at + ln["start"] - seg["start"]) if seg_lens else ln["start"]
+            texts.append(text)
+            spans.append((start, max(0.4, ln["end"] - ln["start"])))
+        if seg_lens and n_ < len(seg_lens):
+            at += seg_lens[n_]
+    return texts, spans
+
+
+def burn_subtitles(cfg, video, srt):
+    """CAPTIONS=on: the subtitles burned into the picture, two short lines at most, always inside the frame."""
+    if cfg.get("CAPTIONS", "off") != "on" or not Path(srt).exists():
+        return
+    tmp = Path(video).with_name("burned.mp4")
+    style = "FontName=DejaVu Sans,FontSize=16,Outline=2,Shadow=1,MarginV=40,MarginL=60,MarginR=60,WrapStyle=0"
+    path = str(srt).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+    try:
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(video), "-vf", f"subtitles='{path}':force_style='{style}'",
+             "-c:a", "copy", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", str(tmp)])
+        tmp.replace(video)
+    except RuntimeError as e:
+        log(f"Couldn't burn in the subtitles ({str(e)[:120]}); they're still in the subtitle file.")
+        tmp.unlink(missing_ok=True)
 
 
 def write_subtitles(texts, timeline, srt_path, vtt_path):
@@ -4610,8 +4953,10 @@ Here is the scene as it is now:
 ---
 Rewrite this scene following these instructions: {instructions}
 {keywords}
-Keep it consistent with the rest of the story unless the instructions say otherwise. Aim for about
-{words} words unless the instructions ask for a different length. {extra}Write it as finished story
+Stay on topic: the same things happen, in the same order, to the same people, with the same outcome and
+details, consistent with the rest of the story (unless the instructions say otherwise). {fresh} {pov}
+Aim for about {words} words unless the instructions ask for a different length; keep it moving, with no padding,
+no repeated words or ideas, and every sentence a complete, clear thought. {extra}Write it as finished story
 prose with plenty of dialogue; put every spoken line in double quotation marks with a speech tag that
 names who is speaking. Write only the scene itself: no title, notes or comments."""
 
@@ -4650,6 +4995,8 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
     extra = ("If the scene involves sex, write it out fully and explicitly, moment by moment, in graphic detail. "
              if adult else "")
     steps = len(idxs) + (2 if then_remaster else 0)
+    pov = (story.get("prefs") or {}).get("pov") or story.get("pov") or detect_pov([x["narration"] for x in story["scenes"]])
+    names = [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)]
     for n_, i in enumerate(idxs):
         report("writing", n_ / steps, f"Rewriting scene {i + 1} ({n_ + 1} of {len(idxs)})")
         sc = story["scenes"][i]
@@ -4660,18 +5007,38 @@ def rewrite_story(cfg, run_id, target, instructions, then_remaster=True, keyword
         if sc.get("chapter_title"):
             context += f"This scene opens chapter {sc['chapter']}, \"{sc['chapter_title']}\".\n"
         words = max(150, len(sc["narration"].split()))
-        new = clean_prose(ask_writer(cfg, REWRITE_PROMPT.format(
-            title=story["title"], genre=story.get("genre", ""), audience=audience, rules=rules,
-            characters=story.get("characters", ""), context=context, text=sc["narration"],
-            instructions=instructions.strip() or "Improve it: richer detail and more natural dialogue.",
-            words=words, extra=extra, keywords=keywords_block(story.get("keywords"), " ".join(
-                s_["narration"] for j_, s_ in enumerate(story["scenes"]) if j_ != i))),
-            as_json=False, system=EXPLICIT_SYSTEM if adult else None))
+        old_sh, old_names = shingles(sc["narration"]), {n for n in names if n and n in sc["narration"]}
+        note, new = "", ""
+        for attempt in range(3):                  # on topic, but in new words: checked, and tried again if not
+            wcfg = dict(cfg, OLLAMA_TEMPERATURE="0.7") if attempt else cfg
+            new = clean_prose(ask_writer(wcfg, REWRITE_PROMPT.format(
+                title=story["title"], genre=story.get("genre", ""), audience=audience, rules=rules,
+                characters=story.get("characters", ""), context=context, text=sc["narration"],
+                instructions=(instructions.strip() or "Write it again, better: the same events in fresh, vivid, "
+                              "natural prose with natural dialogue.") + (" " + note if note else ""),
+                words=words, extra=extra, pov=pov_rule(pov),
+                fresh="But write it fresh, in your own new sentences: don't copy or lightly reword the old ones.",
+                keywords=keywords_block(story.get("keywords"), " ".join(
+                    s_["narration"] for j_, s_ in enumerate(story["scenes"]) if j_ != i))),
+                as_json=False, system=EXPLICIT_SYSTEM if adult else None))
+            if len(new.split()) < 40:
+                note = "Write the whole scene."
+                continue
+            copied = len(shingles(new) & old_sh) / max(1, len(shingles(new)))
+            lost = old_names and len({n for n in old_names if n in new}) < max(1, len(old_names) // 2)
+            if copied > 0.45:
+                note = "The last try copied too much of the old wording: say it all in new sentences."
+            elif lost:
+                note = f"The last try drifted off topic: keep {', '.join(sorted(old_names))} and the same events."
+            elif scene_problems(new, [], pov):
+                note = scene_problems(new, [], pov)
+            else:
+                break
+            log(f"Rewrite of scene {i + 1} tried again: {note}")
         if len(new.split()) < 40:
             raise ValueError(f"The writer sent back almost nothing for scene {i + 1}. Try again.")
         new = proofread(cfg, new, EXPLICIT_SYSTEM if adult else None)
-        new = fix_sentences(cfg, new, EXPLICIT_SYSTEM if adult else None,
-                            [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)])
+        new = fix_sentences(cfg, new, EXPLICIT_SYSTEM if adult else None, names, pov=pov)
         if adult:
             new = adult_guard(cfg, new, EXPLICIT_SYSTEM)
         sc["narration"] = new
@@ -4687,10 +5054,12 @@ def check_writing(cfg, run_id):
     examples."""
     folder, story, result = load_story(cfg, run_id)
     names = [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)]
+    pov = (story.get("prefs") or {}).get("pov") or story.get("pov") or detect_pov(
+        [x.get("narration", "") for x in story.get("scenes") or []])
     total, scenes_with, examples = 0, 0, []
     for i, sc in enumerate(story.get("scenes") or []):
         text = sc.get("narration", "")
-        found = sentence_issues(tidy_sentences(text), names)
+        found = sentence_issues(tidy_sentences(text), names, pov)
         tidy = tidy_sentences(text) != text
         n = len(found) + (1 if tidy else 0)
         total += n
@@ -4717,23 +5086,24 @@ def cleanup_story(cfg, run_id, then_remaster=True, which=(1, 1)):
     system = EXPLICIT_SYSTEM if level == "explicit" else None
     names = [c.get("name") for c in story.get("cast") or [] if isinstance(c, dict)]
     scenes = story.get("scenes") or []
+    pov = (story.get("prefs") or {}).get("pov") or story.get("pov") or detect_pov([x.get("narration", "") for x in scenes])
     before = after = 0
     changed = []
     label = f"Story {which[0]} of {which[1]}: " if which[1] > 1 else ""
     for i, sc in enumerate(scenes):
         old = sc.get("narration", "")
-        found = sentence_issues(old, names)
+        found = sentence_issues(old, names, pov)
         before += len(found)
         report("writing", i / max(1, len(scenes)) * (0.8 if then_remaster else 1),
                f"{label}Cleaning up \"{story.get('title', '')}\": scene {i + 1} of {len(scenes)}")
         text = proofread(cfg, old, system)
-        text = fix_sentences(cfg, text, system, names)
+        text = fix_sentences(cfg, text, system, names, pov=pov)
         if level == "explicit":
             try:
                 text = adult_guard(cfg, text, system)
             except SceneRedo:
                 text = old                                  # keep it as it was rather than lose the scene
-        left = sentence_issues(text, names)
+        left = sentence_issues(text, names, pov)
         if len(left) > len(found) and len(found) > 0:      # never leave it worse than it was
             text, left = old, found
         after += len(left)
@@ -4757,11 +5127,51 @@ def cleanup_story(cfg, run_id, then_remaster=True, which=(1, 1)):
     return out
 
 
-def remaster_story(cfg, run_id, revoice=False, redesign=False):
+def rebuild_video(cfg, folder, story, final, timeline, job, redraw=False):
+    """A story's video made again around new audio, with the same pictures and clips (nothing is drawn or filmed
+    again), each scene's pictures lasting exactly as long as that scene is read now, and its subtitles retimed.
+    timeline: {"segments": [{"kind": "title"|"scene", "index", "start", "end", "lines": [...]}], "total"} on the
+    new audio `final`. The old video is kept as story.before.mp4 the first time."""
+    job = Path(job)
+    job.mkdir(parents=True, exist_ok=True)
+    for f_ in folder.glob("clip_*.mp4"):
+        shutil.copy(f_, job / f_.name)
+    if redraw:                    # new illustrations: planned again from each scene, drawn by the picture app
+        for sc in story.get("scenes") or []:
+            sc.pop("shot_planned", None)
+    else:
+        for f_ in folder.glob("scene_*.png"):
+            shutil.copy(f_, job / f_.name.replace("scene_", "pic_"))
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                            "stream=width,height", "-of", "csv=p=0", str(folder / "story.mp4")],
+                           capture_output=True, text=True).stdout.strip().split(",")
+    w, h = (int(probe[0]), int(probe[1])) if len(probe) == 2 else (1920, 1080)
+    vcfg = dict(cfg) if redraw else dict(cfg, IMAGE_PROVIDER="cards")
+    with tempfile.TemporaryDirectory() as tmpd:
+        slices = slice_segments(final, timeline, job)
+        _, pics, seg_lens = make_video(vcfg, story, slices, job, Path(tmpd), w, h, h > w,
+                                       Path(tmpd) / "story.mp4", "existing", None)
+        if redraw:                # the new pictures are kept with the story (the old ones go)
+            for f_ in folder.glob("scene_*.png"):
+                f_.unlink()
+            for f_ in job.glob("pic_*.png"):
+                shutil.copy(f_, folder / f_.name.replace("pic_", "scene_"))
+        if not (folder / "story.before.mp4").exists() and (folder / "story.mp4").exists():
+            shutil.copy2(folder / "story.mp4", folder / "story.before.mp4")
+        shutil.copy(Path(tmpd) / "story.mp4", folder / "story.mp4")
+    if cfg.get("SUBTITLES", "on") == "on":
+        texts, spans = subtitle_lines(timeline, seg_lens, story.get("title", ""))
+        write_subtitles(texts, spans, folder / "story.srt", folder / "story.vtt")
+        burn_subtitles(cfg, folder / "story.mp4", folder / "story.srt")
+    return seg_lens
+
+
+def remaster_story(cfg, run_id, revoice=False, redesign=False, redraw=False):
     """Make the audio again (and the video's sound) from the story as it is now: new or changed lines
     are recorded, the sound is designed and mixed again with your current sound files."""
     folder, story, result = load_story(cfg, run_id)
     level = result.get("level") or "family"
+    story["level"] = level                     # pictures follow the story's level (grown-up ones stay tasteful)
     if level == "explicit":
         adult_config(cfg)
     mode = result.get("mode") or ("video" if result.get("video_file") else "audio")
@@ -4790,31 +5200,31 @@ def remaster_story(cfg, run_id, revoice=False, redesign=False):
             result["cast_voices"] = {v["name"]: v["voice"] for v in voices["voices"].values()}
         if cfg["SUBTITLES"] == "on":
             result["subtitles_file"] = str(folder / "story.srt")
+        if redraw and pick_image_provider(cfg) == "local" and not local_image_ready(cfg):
+            report("video", 0.05, "Opening Draw Things…")
+            ok, what = open_mac_app(cfg, "draw-things")
+            if not ok:
+                raise RuntimeError(f"Draw Things isn't answering ({what}). {DRAW_THINGS_FIX}")
         if mode == "video" and (folder / "story.mp4").exists():
-            report("video", 0.1, "Putting the video together again with the new sound")
-            for f_ in folder.glob("clip_*.mp4"):
-                shutil.copy(f_, job / f_.name)
-            for f_ in folder.glob("scene_*.png"):
-                shutil.copy(f_, job / f_.name.replace("scene_", "pic_"))
-            probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                                    "stream=width,height", "-of", "csv=p=0", str(folder / "story.mp4")],
-                                   capture_output=True, text=True).stdout.strip().split(",")
-            w, h = (int(probe[0]), int(probe[1])) if len(probe) == 2 else (1920, 1080)
-            vcfg = dict(cfg, IMAGE_PROVIDER="cards")
-            with tempfile.TemporaryDirectory() as tmpd:
-                slices = slice_segments(final, timeline, job)
-                _, _, seg_lens = make_video(vcfg, story, slices, job, Path(tmpd), w, h, h > w,
-                                            Path(tmpd) / "story.mp4", "existing", None)
-                shutil.copy(Path(tmpd) / "story.mp4", folder / "story.mp4")
-            if cfg["SUBTITLES"] == "on":
-                texts, spans, at = [], [], 0.0
-                for seg, seg_len in zip(timeline["segments"], seg_lens):
-                    if seg["lines"]:
-                        texts.append(story["title"] if seg["kind"] == "title" else story["scenes"][seg["index"]]["narration"])
-                        spans.append((at + seg["lines"][0]["start"] - seg["start"],
-                                      seg["lines"][-1]["end"] - seg["lines"][0]["start"]))
-                    at += seg_len
-                write_subtitles(texts, spans, folder / "story.srt", folder / "story.vtt")
+            report("video", 0.1, "Drawing new pictures and putting the video together" if redraw else
+                   "Putting the video together again with the new sound")
+            rebuild_video(cfg, folder, story, final, timeline, job, redraw)
+            (folder / "story.json").write_text(json.dumps(story, indent=2))
+        if redraw and (folder / "story-book.pdf").exists():
+            report("finishing", 0.2, "Laying out the picture book with the new pictures")
+            if mode != "video":
+                make_pictures(cfg, story, job, 1650, 1100, False, range(len(story["scenes"])), None)
+                for f_ in folder.glob("scene_*.png"):
+                    f_.unlink()
+                for f_ in job.glob("pic_[0-9][0-9].png"):
+                    shutil.copy(f_, folder / f_.name.replace("pic_", "scene_"))
+            imgs = [folder / f"scene_{i + 1:02d}.png" for i in range(len(story["scenes"]))]
+            try:
+                make_book(story, [f if f.exists() else None for f in imgs],
+                          folder / "cover.jpg" if (folder / "cover.jpg").exists() else None, folder / "story-book.pdf",
+                          result.get("series", "") if result.get("episode", 1) > 1 else "")
+            except Exception as e:
+                log(f"Picture book skipped ({e}).")
         report("finishing", 0.5, "Making the audiobook (chapters, cover and title)")
         try:
             make_audiobook(story, audio_out, timeline, folder, result.get("series", "")
@@ -5061,6 +5471,8 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
                     shutil.copy(c, out_dir / f"clip_{i + 1:02d}.mp4")
             for i, p_ in pics.items():
                 shutil.copy(p_, out_dir / f"scene_{i + 1:02d}.png")
+            for p_ in job.glob("pic_[0-9][0-9]_[0-9].png"):     # the extra pictures of long scenes, kept too
+                shutil.copy(p_, out_dir / p_.name.replace("pic_", "scene_"))
             made = sum(1 for c in clips if c)
             result.update(video_file=str(mp4), video_engine=vprovider if clip_mode else "slideshow")
             if clip_mode:
@@ -5086,14 +5498,10 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
     report("finishing", 0.3, "Finishing up: subtitles, cover and library")
     if args.mode == "video" and cfg["SUBTITLES"] == "on" and timeline:
         # the video adds a short breath after each part, so its subtitles follow the video's timing
-        texts, spans, at = [], [], 0.0
-        for seg, seg_len in zip(timeline["segments"], seg_lens):
-            if seg["lines"]:
-                texts.append(story["title"] if seg["kind"] == "title" else story["scenes"][seg["index"]]["narration"])
-                a = seg["lines"][0]["start"] - seg["start"]
-                spans.append((at + a, seg["lines"][-1]["end"] - seg["lines"][0]["start"]))
-            at += seg_len
+        texts, spans = subtitle_lines(timeline, seg_lens, story.get("title", ""))
         write_subtitles(texts, spans, out_dir / "story.srt", out_dir / "story.vtt")
+        if result.get("video_file"):
+            burn_subtitles(cfg, out_dir / result["video_file"], out_dir / "story.srt")
     if args.mode != "video" or not result.get("video_file"):
         report("finishing", 0.4, "Painting the cover")
         make_cover(cfg, story, out_dir, level)
@@ -5229,6 +5637,9 @@ def main():
                     help="proofread and fix the sentences of finished stories, then remake their audio")
     ap.add_argument("--revoice", action="store_true", help="with --remaster: choose the character voices again")
     ap.add_argument("--redesign", action="store_true", help="with --remaster: choose the sounds again")
+    ap.add_argument("--redraw", action="store_true", help="with --remaster: draw new pictures for the video and book")
+    ap.add_argument("--skip-checks", dest="skip_checks", action="store_true",
+                    help="don't check the writer, voices and picture app before starting")
     ap.add_argument("--job-id", help=argparse.SUPPRESS)
     ap.add_argument("--keywords", help="words or phrases the story should include (comma-separated)")
     ap.add_argument("--sounds", help="sounds you want to hear, e.g. 'rain, thunder, crackling fire'")
@@ -5370,7 +5781,7 @@ def main():
             if args.rewrite:
                 out = rewrite_story(cfg, run_id, args.target, instructions or "", not args.no_remake, args.keywords)
             else:
-                out = remaster_story(cfg, run_id, args.revoice, args.redesign)
+                out = remaster_story(cfg, run_id, args.revoice, args.redesign, args.redraw)
         except Exception as e:
             write_status(cfg, job_id, state="failed", error=str(e), kind="rewrite" if args.rewrite else "remaster",
                          story=run_id)
@@ -5438,8 +5849,14 @@ def main():
     est["chapters"] = args.chapters
     if args.estimate:
         extra = {"series": series["name"], "episode": len(done_episodes(series)) + 1} if series else {}
-        print(json.dumps({"ok": True, **est, "level": level, **extra}))
+        checks = preflight(cfg, args, level, vprovider, auto=False)
+        print(json.dumps({"ok": True, **est, "level": level, **extra, "checks": checks}))
         return
+    if not args.child and not getattr(args, "skip_checks", False):
+        checks = preflight(cfg, args, level, vprovider, auto=True)
+        if any(c["blocking"] for c in checks):
+            print(json.dumps({"ok": False, "error": "Not ready yet. " + preflight_message(checks), "checks": checks}))
+            sys.exit(2)
     if est["estimate_usd"] > float(cfg["MAX_COST_USD"]) and not args.yes:
         print(json.dumps({"ok": False, "needs_confirm": True, **est,
                           "error": f"{est['summary']} is over MAX_COST_USD (${cfg['MAX_COST_USD']}). "

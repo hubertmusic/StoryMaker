@@ -27,7 +27,7 @@ const LEVEL_NAMES = { "young-kids": "Young kids", kids: "Kids", "middle-grade": 
 const AGES = [["child", "Child"], ["teen", "Teen"], ["adult", "Adult"], ["elder", "Elder"]];
 const PITCH = [["", "Natural"], ["^0.94", "Deeper"], ["^1.04", "Brighter"], ["^1.08", "Younger"]];
 const JOBS = { cast: "Finding who speaks", sounds: "Choosing the sounds", record: "Recording", all: "Making the audiobook",
-  tidy: "Cleaning up the writing" };
+  tidy: "Cleaning up the writing", video: "Making the pictures and video" };
 const GENDER_WORD = (c) => c.gender === "female"
   ? { child: "girl", teen: "teenage girl", adult: "woman", elder: "older woman" }[c.age || "adult"]
   : { child: "boy", teen: "teenage boy", adult: "man", elder: "older man" }[c.age || "adult"];
@@ -601,6 +601,31 @@ document.querySelectorAll("input[name=engine]").forEach((r) => r.addEventListene
 $("recordAll").onclick = () => startJob("record");
 
 // ───────────────────────── 5 · listen ─────────────────────────
+// pictures and a video, timed to this reading (and a picture book)
+function videoBlock(f) {
+  const msg = el("p", { class: "hint" });
+  const go = el("button", { type: "button", class: "small-btn", text: f.video ? "Make the pictures and video again" : "Make pictures and a video" });
+  go.disabled = !f.pictures;
+  go.addEventListener("click", async () => {
+    if (await startJob("video")) { msg.textContent = "Drawing… Progress is at the top. Pictures already drawn are kept, so this is quicker the second time."; go.disabled = true; }
+  });
+  const box = el("div", { class: "send-sm video-block" },
+    el("strong", { text: "Pictures and video" }),
+    el("span", { class: "hint", text: f.pictures
+      ? "A picture for every section, drawn in one look for the whole book (long sections get more than one), and a video of this audiobook with them: each picture stays on screen exactly while its part is read, with subtitles. Also a picture book (PDF)."
+        + (book.level === "explicit" || book.level === "mature" ? " Grown-up books get tasteful pictures only: everyone is an adult and fully clothed." : "")
+      : "Needs a picture app: open Draw Things, turn on Settings → API Server (HTTP, port 7860), and set LOCAL_IMAGE_URL in storymaker.env." }),
+    go, msg);
+  if (f.video) {
+    box.append(el("video", { controls: true, preload: "metadata", src: `${f.video}?${f.videoMade || ""}`, class: "book-video" }),
+      el("div", { class: "downloads" },
+        el("a", { href: `${f.video}?download=1`, text: "Video (MP4)" }),
+        f.subtitles && el("a", { href: `${f.subtitles}?download=1`, text: "Subtitles (SRT)" }),
+        f.pictureBook && el("a", { href: `${f.pictureBook}?download=1`, text: "Picture book (PDF)" })));
+  }
+  return box;
+}
+
 function renderListen() {
   const f = book.files, box = $("listen");
   box.replaceChildren();
@@ -615,7 +640,7 @@ function renderListen() {
     side.append(el("p", { class: "sub", text: `${book.chapters.length} chapters, mastered for listening` }),
       el("audio", { controls: true, preload: "metadata", src: `${f.mp3}?${Date.now()}` }),
       all || "",
-      el("p", { class: "hint", text: "One zip: the audiobook, the MP3, every chapter, the book as a PDF, the cover and the sound credits." }),
+      el("p", { class: "hint", text: "One zip: the audiobook, the MP3, every chapter, the book as a PDF, the cover and the sound credits (and the video and picture book, once made)." }),
       el("div", { class: "downloads" },
         f.m4b && el("a", { href: `${f.m4b}?download=1`, text: "Audiobook (M4B, with chapters)" }),
         el("a", { href: `${f.mp3}?download=1`, text: "MP3" }),
@@ -631,7 +656,8 @@ function renderListen() {
         send.disabled = false;
         if (!r.ok) { msg.className = "error"; msg.textContent = r.error || "Not sent."; return; }
         msg.textContent = "Sent. The story in StoryMaker now plays and downloads this audiobook. Its earlier audio is kept as a backup."
-          + (r.had_video ? " (The video keeps its own soundtrack.)" : "");
+          + (r.video === "remade" ? " Its video was made again with this reading: the same pictures, each lasting as long as its scene is read now, with new subtitles (the old video is kept as story.before.mp4)."
+            : r.had_video ? ` The video was ${r.video || "not remade"}.` : "");
         send.textContent = "Send to StoryMaker again";
       });
       side.append(el("div", { class: "send-sm" },
@@ -639,6 +665,7 @@ function renderListen() {
         el("span", { class: "hint", text: "Replace the story's audio in your StoryMaker library with this audiobook." }),
         send, msg));
     }
+    side.append(videoBlock(f));
     const list = el("ol", { class: "chapter-downloads" });
     f.chapters.forEach((c) => {
       if (!c.audio) return;

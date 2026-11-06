@@ -399,3 +399,12 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .wr-list q { display: block; font-style: italic; }
 .wr-why { display: block; opacity: .75; font-size: .88em; }
 @media (max-width: 560px) { .wr-row { grid-template-columns: auto 1fr; } .wr-count { grid-column: 2; } }
+
+/* ready checks */
+.checks { list-style: none; padding: 0; margin: 4px 0 16px; display: grid; gap: 6px; font-size: 15px; }
+.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 6px; align-items: start; line-height: 1.4; }
+.checks .mark { font-weight: 700; text-align: center; }
+.checks .ok .mark { color: #7fd1a1; }
+.checks .warn .mark { color: #f2c46d; }
+.checks .bad { color: #ffb4a8; }
+.checks .bad .mark { color: #ff8a7a; }

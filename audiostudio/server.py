@@ -16,7 +16,7 @@ from pathlib import Path
 
 import requests
 import uvicorn
-from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 import engine as E
@@ -27,6 +27,18 @@ SM = cfg["STORYMAKER_URL"].rstrip("/")
 COOKIE = "as_session"
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 worker = E.Worker(cfg)
+
+# StoryMaker runs inside Docker and can't open Mac apps; the studio runs on the Mac and opens them for it. Only
+# StoryMaker can ask: it reads this secret from its own library folder (which only the two apps share).
+import secrets as _secrets
+HELPER_TOKEN = _secrets.token_hex(24)
+try:
+    _tok = Path(cfg["SM_LIBRARY"]) / ".helper-token"
+    _tok.parent.mkdir(parents=True, exist_ok=True)
+    _tok.write_text(HELPER_TOKEN)
+    os.chmod(_tok, 0o600)
+except OSError as _e:
+    E.log(f"Couldn't share the helper key with StoryMaker ({_e}); it won't be able to open Draw Things by itself.")
 
 def alive(pid):
     try:
@@ -191,7 +203,10 @@ def files_of(d, p):
             "cover": url("cover.jpg"), "chapters": chapters, "pdf": f"/api/projects/{p['id']}/book.pdf",
             "everything": f"/api/projects/{p['id']}/everything" if ready else None,
             "canSend": ready and (p.get("source") or {}).get("type") == "storymaker",
-            "sent": p.get("sent_to_storymaker")}
+            "sent": p.get("sent_to_storymaker"),
+            "video": url("story.mp4"), "subtitles": url("story.srt"), "pictureBook": url("picture-book.pdf"),
+            "videoMade": p.get("video_made"),
+            "pictures": bool(E.sm.pick_image_provider(E.writer_cfg(cfg, p["level"])) != "cards")}
 
 
 # ───────────────────────────── pages ─────────────────────────────
@@ -361,6 +376,18 @@ def import_text(body: dict = Body(...), user=Depends(current_user)):
     return {"ok": True, "id": pid}
 
 
+@app.post("/api/helper/open")
+def helper_open(body: dict = Body(...), x_helper_token: str = Header("")):
+    """For StoryMaker: open Draw Things or Ollama on this Mac and wait until it answers."""
+    if not x_helper_token or not _secrets.compare_digest(x_helper_token, HELPER_TOKEN):
+        raise HTTPException(403, "Not allowed.")
+    app_ = str(body.get("app", ""))
+    if app_ not in E.sm.MAC_APPS:
+        raise HTTPException(400, "Unknown app.")
+    ok, detail = E.sm.open_mac_app(cfg, app_)
+    return {"ok": ok, "detail": detail}
+
+
 @app.get("/api/books/search")
 def books_search(q: str = "", user=Depends(current_user)):
     try:
@@ -466,7 +493,7 @@ def sounds(pid: str, body: dict = Body(...), user=Depends(current_user)):
 def job(pid: str, body: dict = Body(...), user=Depends(current_user)):
     d, p, s = project_for(user, pid)
     kind = body.get("kind")
-    if kind not in ("cast", "sounds", "record", "all", "tidy"):
+    if kind not in ("cast", "sounds", "record", "all", "tidy", "video"):
         raise HTTPException(400, "Unknown job.")
     kw = {}
     if kind == "tidy":
@@ -511,7 +538,8 @@ def preview(pid: str, section: str, line: str, engine: str = "", user=Depends(cu
     return FileResponse(f, media_type="audio/mpeg", headers={"Cache-Control": "no-cache"})
 
 
-FILE_NAME = re.compile(r"^(story\.m4b|story\.mp3|sound-credits\.txt|cover\.jpg|chapters/\d{3}\.mp3)$")
+FILE_NAME = re.compile(r"^(story\.m4b|story\.mp3|story\.mp4|story\.srt|picture-book\.pdf|sound-credits\.txt|cover\.jpg|"
+                       r"chapters/\d{3}\.mp3)$")
 
 
 @app.get("/api/projects/{pid}/file/{name:path}")
@@ -520,9 +548,12 @@ def file(pid: str, name: str, download: int = 0, user=Depends(current_user)):
     f = d / "out" / name
     if not FILE_NAME.match(name) or not f.is_file():
         raise HTTPException(404, "Not made yet.")
-    kind = {".m4b": "audio/mp4", ".mp3": "audio/mpeg", ".txt": "text/plain; charset=utf-8", ".jpg": "image/jpeg"}[f.suffix]
+    kind = {".m4b": "audio/mp4", ".mp3": "audio/mpeg", ".txt": "text/plain; charset=utf-8", ".jpg": "image/jpeg",
+            ".mp4": "video/mp4", ".srt": "text/plain; charset=utf-8", ".pdf": "application/pdf"}[f.suffix]
     nice = re.sub(r"[^\w .,'()-]", "", p["title"]).strip() or "Audiobook"
     fname = f"{nice}{f.suffix}" if name.startswith("story") else f"{nice} - {f.name}"
+    if name == "picture-book.pdf":
+        fname = f"{nice} (picture book).pdf"
     m = re.match(r"chapters/(\d{3})\.mp3$", name)
     if m and int(m.group(1)) <= len(p["chapters"]):
         fname = f"{E.safe_name(p['title'])} - {int(m.group(1)):02d} {E.safe_name(p['chapters'][int(m.group(1)) - 1]['title'])}.mp3"
