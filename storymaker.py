@@ -44,6 +44,7 @@ import platform
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1251,6 +1252,29 @@ ADULT_SWAPS = [(r"\bhigh[- ]school\b", "college"), (r"\bmiddle[- ]school\b", "co
                (r"\bteenagers\b", "young adults"), (r"\bteenager\b", "young adult"), (r"\bteen(s)?\b", "young adult\\1"),
                (r"\bteenage(d)?\b", "young"), (r"\byoung girl(s)?\b", "young woman"), (r"\byoung boy(s)?\b", "young man")]
 
+# In a grown-up book, "young girl" / "young boy" is everyday wording for an adult ("a young girl fresh out of
+# college"). Books brought into Audio Studio get "young woman" / "young man" instead, so nothing in an explicit
+# book reads as a child. Every other word about youth still stops an explicit book (check_adult_only).
+YOUNG_WORDING = re.compile(r"\b(young)(\s+)(girl|boy)(s?)\b", re.I)
+
+
+def adult_wording(text):
+    """("…young woman…", how many were changed)."""
+    count = 0
+
+    def swap(m):
+        nonlocal count
+        count += 1
+        word = {"girl": "woman", "boy": "man"}[m.group(3).lower()]
+        if m.group(4):
+            word = word[:-3] + "men"                       # woman → women, man → men
+        if m.group(3).isupper():
+            word = word.upper()
+        return m.group(1) + m.group(2) + word
+
+    return YOUNG_WORDING.sub(swap, text or ""), count
+
+
 CLEAN_PROMPT = """Rewrite this passage of an adults-only story. Every character in it is an adult (20 or older).
 Take out every flashback or memory of anyone's childhood or school years, every age under 20, and every
 mention of children, kids, babies, teenagers or growing up; keep the scene in the characters' adult present.
@@ -1329,18 +1353,30 @@ MINOR_WORDS = re.compile(
     r"(1[0-7]|[1-9])[- ]?(year|yr)s?[- ]old)\b", re.I)
 
 
+def _where_in(text, start, end, room=90):
+    """The words around a match, so a long book shows which sentence it's in."""
+    if len(text) <= 2 * room + (end - start):
+        return ""
+    a, b = max(0, start - room), min(len(text), end + room)
+    snip = re.sub(r"\s+", " ", text[a:b]).strip()
+    return f" (“{'…' if a else ''}{snip}{'…' if b < len(text) else ''}”)"
+
+
 def check_adult_only(text, where="what you typed"):
     """Explicit stories are for adult characters only. Stop before anything is written if the text gives an age
     under 20 or suggests a minor."""
+    text = text or ""
     age = young_age(text)
     if age:
-        raise MinorContent(f"Explicit stories are for adults only (20 and over), and {where} mentions “{age}”. "
-                           "Nothing was made. Make every character 20 or older, or use another level.")
-    m = MINOR_WORDS.search(text or "")
+        i = text.find(age)
+        raise MinorContent(f"Explicit stories are for adults only (20 and over), and {where} mentions “{age}”"
+                           f"{_where_in(text, i, i + len(age)) if i >= 0 else ''}. Nothing was made. Make every "
+                           "character 20 or older, or use another level.")
+    m = MINOR_WORDS.search(text)
     if m:
-        raise ValueError(f"Explicit stories are for adult characters only, and {where} mentions “{m.group(0)}”. "
-                         "Nothing was made. Reword that part (for example “college” for “high school”, "
-                         "“young woman” for “young girl”), or use another level.")
+        raise ValueError(f"Explicit stories are for adult characters only, and {where} mentions “{m.group(0)}”"
+                         f"{_where_in(text, m.start(), m.end())}. Nothing was made. Reword that part (for example "
+                         "“college” for “high school”, “young woman” for “young girl”), or use another level.")
 
 
 QUOTE_CHARS = ('"', "“", "”")
@@ -4306,8 +4342,21 @@ def jobs_dir(cfg):
     return d
 
 
+class JobStopped(BaseException):
+    """You pressed Stop. A BaseException, so no "carry on after a problem" handler swallows it."""
+
+
+_WORKER_PID = None                     # set in the background copy that does the work; the page's Stop uses it
+
+
+def _stop_requested(signum, frame):
+    raise JobStopped()
+
+
 def write_status(cfg, job_id, **data):
     p = jobs_dir(cfg) / f"{job_id}.status.json"
+    if _WORKER_PID and "pid" not in data:
+        data["pid"] = _WORKER_PID
     data = {"job_id": job_id, "updated": dt.datetime.now().isoformat(timespec="seconds"), **data}
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data))
@@ -5560,6 +5609,15 @@ def recover_settings(cfg, args):
     so only the missing scenes are written."""
     rid = re.sub(r"[^a-f0-9]", "", args.recover or "")
     folder = jobs_dir(cfg) / rid
+    if rid and not (folder / "outline.json").exists() and (folder / "story.json").exists():
+        # written in full before it stopped (it was recording or filming): carry on from the finished text
+        story = json.loads((folder / "story.json").read_text())
+        if not args.idea:
+            args.idea = (story.get("logline") or story.get("title") or "Continue the story.")[:2000]
+        if not args.level and story.get("level") in LEVELS:
+            args.level = story["level"]
+        args._job = rid
+        return
     if not rid or not (folder / "outline.json").exists():
         print(json.dumps({"ok": False, "error": "There's nothing saved for that story to carry on from."}))
         sys.exit(2)
@@ -5657,6 +5715,10 @@ def main():
     ap.add_argument("--voices-list", action="store_true", help="list the voices you can pick")
     ap.add_argument("--voice-sample", metavar="VOICE", help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.child:                       # the background copy doing the work: Stop on the page ends it cleanly
+        global _WORKER_PID
+        _WORKER_PID = os.getpid()
+        signal.signal(signal.SIGTERM, _stop_requested)
 
     cfg = load_settings()
     if args.provider:
@@ -5728,20 +5790,28 @@ def main():
             argv = [a for a in sys.argv[1:] if a != "--background"]
             cmd = [sys.executable, str(Path(__file__).resolve()), *argv, "--job-id", job_id, "--child"]
             with open(logf, "a") as lf:
-                subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
-                                 start_new_session=True, close_fds=True)
-            write_status(cfg, job_id, state="queued", kind="cleanup", story=ids[0], stories=ids)
+                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
+                                        start_new_session=True, close_fds=True)
+            write_status(cfg, job_id, state="queued", pid=proc.pid, kind="cleanup", story=ids[0], stories=ids)
             print(json.dumps({"ok": True, "queued": True, "job_id": job_id}))
             return
         progress_start(cfg, job_id, jobs_dir(cfg) / job_id, "audio", False)
         _PROG["status"].update(kind="cleanup", story=ids[0], stories=ids)
         results, failed = [], []
-        for n_, x in enumerate(ids):
-            try:
-                results.append(cleanup_story(dict(cfg), x, not args.no_remake, (n_ + 1, len(ids))))
-            except Exception as e:                       # one story's problem doesn't stop the others
-                log(f"Couldn't clean up {x}: {str(e)[:200]}")
-                failed.append({"run_id": x, "error": str(e)[:200]})
+        try:
+            for n_, x in enumerate(ids):
+                try:
+                    results.append(cleanup_story(dict(cfg), x, not args.no_remake, (n_ + 1, len(ids))))
+                except Exception as e:                       # one story's problem doesn't stop the others
+                    log(f"Couldn't clean up {x}: {str(e)[:200]}")
+                    failed.append({"run_id": x, "error": str(e)[:200]})
+        except JobStopped:
+            msg = (f"Stopped. {len(results)} of {len(ids)} stories were cleaned up before you stopped it; the one it "
+                   "was working on may have some scenes cleaned up and some not. Its sound wasn't remade.")
+            log(msg)
+            write_status(cfg, job_id, state="stopped", detail=msg, kind="cleanup", story=ids[0])
+            print(json.dumps({"ok": False, "stopped": True, "error": msg}))
+            return
         summary = {"stories": len(results), "scenes_changed": sum(r["scenes_changed"] for r in results),
                    "problems_before": sum(r["problems_before"] for r in results),
                    "problems_after": sum(r["problems_after"] for r in results), "failed": failed}
@@ -5771,9 +5841,9 @@ def main():
             if args.rewrite:
                 cmd += ["--instructions", instructions or ""]
             with open(logf, "a") as lf:
-                subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
-                                 start_new_session=True, close_fds=True)
-            write_status(cfg, job_id, state="queued", kind="rewrite" if args.rewrite else "remaster", story=run_id)
+                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
+                                        start_new_session=True, close_fds=True)
+            write_status(cfg, job_id, state="queued", pid=proc.pid, kind="rewrite" if args.rewrite else "remaster", story=run_id)
             print(json.dumps({"ok": True, "queued": True, "job_id": job_id}))
             return
         progress_start(cfg, job_id, jobs_dir(cfg) / job_id, "audio", False)
@@ -5783,6 +5853,22 @@ def main():
                 out = rewrite_story(cfg, run_id, args.target, instructions or "", not args.no_remake, args.keywords)
             else:
                 out = remaster_story(cfg, run_id, args.revoice, args.redesign, args.redraw)
+        except JobStopped:
+            msg = ("Stopped. The story's sound and video may be half-made now: remake them when you're ready."
+                   if not args.rewrite else "Stopped. The story wasn't changed.")
+            log(msg)
+            if not args.rewrite:
+                try:                                         # the library shows "remake the audio to match"
+                    rf = story_folder(cfg, run_id) / "result.json"
+                    r_ = json.loads(rf.read_text())
+                    r_["audio_outdated"] = True
+                    rf.write_text(json.dumps(r_, indent=2))
+                except Exception:
+                    pass
+            write_status(cfg, job_id, state="stopped", detail=msg, kind="rewrite" if args.rewrite else "remaster",
+                         story=run_id)
+            print(json.dumps({"ok": False, "stopped": True, "error": msg}))
+            return
         except Exception as e:
             write_status(cfg, job_id, state="failed", error=str(e), kind="rewrite" if args.rewrite else "remaster",
                          story=run_id)
@@ -5877,9 +5963,9 @@ def main():
         argv = [a for a in sys.argv[1:] if a != "--background"]
         cmd = [sys.executable, str(Path(__file__).resolve()), *argv, "--idea", idea, "--yes", "--child"]
         with open(logf, "a") as lf:
-            subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
-                             start_new_session=True, close_fds=True)
-        write_status(cfg, job_id, state="queued")
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
+                                    start_new_session=True, close_fds=True)
+        write_status(cfg, job_id, state="queued", pid=proc.pid)
         print(json.dumps({"ok": True, "queued": True, "job_id": job_id, **est,
                           "message": "Working on it — you'll get a notification when it's ready."}))
         return
@@ -5890,6 +5976,16 @@ def main():
     except AlreadyRunning as e:                           # the copy that's running keeps its progress as it is
         log(str(e))
         print(json.dumps({"ok": False, "error": str(e)}))
+        raise SystemExit(0)
+    except JobStopped:                                    # Stop pressed: what's written so far is kept to carry on
+        wrote = (job / "outline.json").exists() or (job / "story.json").exists() or any(job.glob("scene_c*_s*.txt"))
+        msg = ("Stopped. What was already made is kept: carry it on from Unfinished stories, or delete it there."
+               if wrote else "Stopped before anything was written. Nothing was kept or spent.")
+        if not wrote:
+            shutil.rmtree(job, ignore_errors=True)
+        log(msg)
+        write_status(cfg, job_id, state="stopped", detail=msg, title=(_PROG.get("status") or {}).get("title"))
+        print(json.dumps({"ok": False, "stopped": True, "error": msg}))
         raise SystemExit(0)
     except MinorContent as e:
         shutil.rmtree(job, ignore_errors=True)            # nothing of it is kept: not the plan, not a scene

@@ -135,11 +135,21 @@ async function showHome() {
       : b.has_book ? el("span", { class: "pill done", text: "Audiobook ready" })
       : b.state === "failed" ? el("span", { class: "pill bad", text: "Stopped by a problem" })
       : el("span", { class: "pill", text: b.cast_done ? "Cast" : "New" });
-    books.append(el("button", { type: "button", class: "book-row", onclick: () => { location.hash = `b=${b.id}`; } },
+    const row = el("button", { type: "button", class: "book-row", onclick: () => { location.hash = `b=${b.id}`; } },
       b.has_cover ? el("img", { src: `/api/projects/${b.id}/file/cover.jpg`, alt: "" }) : el("span", { class: "noart", text: (b.title || "?")[0] }),
       el("span", {}, el("div", { class: "t", text: b.title }),
         el("div", { class: "m", text: `${b.chapters} chapter${b.chapters === 1 ? "" : "s"} · ${Number(b.words || 0).toLocaleString()} words · ${LEVEL_NAMES[b.level] || b.level}` })),
-      pill));
+      pill);
+    if (b.state === "running" || b.state === "queued") {
+      const stop = el("button", { type: "button", class: "quiet stop-row", text: "Stop", "aria-label": `Stop ${b.title}` });
+      stop.onclick = async () => {
+        if (!confirm(`Stop working on “${b.title}”? What's recorded so far is kept: start again to carry on.`)) return;
+        stop.disabled = true; stop.textContent = "Stopping…";
+        await api(`/api/projects/${b.id}/stop`, { method: "POST" });
+        setTimeout(showHome, 2500);
+      };
+      books.append(el("div", { class: "book-line" }, row, stop));
+    } else books.append(row);
   }
   const sel = $("smStory");
   sel.replaceChildren();
@@ -269,6 +279,7 @@ function renderRun(st) {
   const busy = ["running", "queued"].includes(st.state);
   document.body.classList.toggle("on-air", busy && (st.job === "record" || st.job === "all"));
   $("makeAll").disabled = busy; $("stopJob").hidden = !busy;
+  if (!busy) { $("stopJob").disabled = false; $("stopJob").textContent = "Stop"; }
   $("runMeterWrap").hidden = !busy;
   $("runMeter").style.width = `${st.progress || 0}%`;
   let state, detail = st.detail || "";
@@ -276,8 +287,8 @@ function renderRun(st) {
   else if (st.state === "failed") { state = "Stopped by a problem."; detail = `${st.error || ""} Press the button again to carry on.`; }
   else if (st.state === "stopped") state = "Stopped.";
   else if (book.files.m4b) { state = "The audiobook is ready."; detail = "Listen in step 5. Change anything and record again: only what changed is redone."; }
-  else if (book.tidyPending) { state = "Ready when you are."; detail = "The writing is cleaned up first, then the cast is found. Make the whole audiobook in one go, or start with step 1."; }
-  else if (!book.castDone) { state = "Ready when you are."; detail = "Check the cast first (step 1), or make the whole audiobook in one go."; }
+  else if (book.tidyPending) { state = "Ready when you are. Nothing has started yet."; detail = "Press Make the audiobook to pick the voices, sounds and music first. The writing is cleaned up before anything is recorded."; }
+  else if (!book.castDone) { state = "Ready when you are. Nothing has started yet."; detail = "Press Make the audiobook to pick the voices, sounds and music first, or check the cast in step 1."; }
   else { state = "Cast and ready to record."; detail = "Check the script and sounds, then record."; }
   $("runState").textContent = state; $("runDetail").textContent = detail;
   $("makeAll").textContent = book.files.m4b ? "Make it again" : "Make the audiobook";
@@ -293,9 +304,66 @@ $("makeAll").onclick = async () => {
   if (edits.size) await saveScript();
   if (tab === "cast") await saveCast(true);
   if (tab === "sounds") await saveSounds(true);
-  startJob("all");
+  openMakeChoices();
 };
-$("stopJob").onclick = async () => { await api(`/api/projects/${book.id}/stop`, { method: "POST" }); };
+// The choices for this book, before anything starts: voices, narrator, clean-up, sounds, music, pictures.
+function openMakeChoices() {
+  const again = !!book.files.m4b;
+  $("makeH").textContent = again ? "Make it again" : "Before it starts";
+  $("makeIntro").textContent = again
+    ? "Change anything you like. Only what changed is recorded again. Nothing starts until you press Start."
+    : "Pick how this book is made. Nothing starts until you press Start.";
+  const eng = book.engine === "chatterbox" && !me.chatterbox ? "kokoro" : book.engine || me.engine;
+  document.querySelectorAll("input[name=mkEngine]").forEach((r) => {
+    r.checked = r.value === eng; r.disabled = r.value === "chatterbox" && !me.chatterbox;
+  });
+  const narr = $("mkNarrator");
+  narr.replaceChildren(el("option", { value: "", text: "Automatic", selected: !book.narrator }), ...voiceOptions("", book.narrator || ""));
+  if (book.narrator && !narr.value) narr.value = "";
+  const tidyDone = !!book.tidyResult;
+  $("mkTidy").checked = !!book.tidyPending;
+  $("mkTidyLabel").textContent = tidyDone ? "Clean up the spelling and sentences again" : "Clean up the spelling and sentences first";
+  $("mkSoundsRow").hidden = !book.soundsAvailable;
+  $("mkSounds").checked = (book.soundscapes || "on") === "on";
+  $("mkMusic").checked = (book.music || "on") === "on";
+  $("mkVideoRow").hidden = !book.files.pictures;
+  $("mkVideo").checked = false;
+  $("mkStart").disabled = false; $("mkStart").textContent = "Start";
+  updateMakePlan();
+  $("makeDlg").showModal();
+}
+function updateMakePlan() {
+  const steps = [];
+  if ($("mkTidy").checked) steps.push("Clean up the writing");
+  if (!book.castDone) steps.push("Find the cast and give everyone a voice");
+  if ($("mkSounds").checked && !$("mkSoundsRow").hidden && !book.soundsDone) steps.push("Choose the sounds");
+  const eng = (document.querySelector("input[name=mkEngine]:checked") || {}).value || "kokoro";
+  steps.push(`Record ${book.files.chapters.some((c) => c.audio) ? "what's changed" : "every chapter"} with ${eng === "chatterbox" ? "Chatterbox" : "Kokoro"}`
+    + `${$("mkMusic").checked ? ", with music" : ""}${$("mkSounds").checked && !$("mkSoundsRow").hidden ? " and sounds" : ""}`);
+  if ($("mkVideo").checked && !$("mkVideoRow").hidden) steps.push("Draw the pictures and make the video");
+  $("mkPlan").replaceChildren(el("li", { class: "mk-plan-h", text: "It will:" }), ...steps.map((t) => el("li", { text: t })));
+}
+document.querySelectorAll("#makeDlg input").forEach((i) => i.addEventListener("change", updateMakePlan));
+$("mkCancel").onclick = () => $("makeDlg").close();
+$("mkStart").onclick = async () => {
+  $("mkStart").disabled = true; $("mkStart").textContent = "Starting…";
+  const engine = (document.querySelector("input[name=mkEngine]:checked") || {}).value;
+  const choices = { narrator: $("mkNarrator").value, tidy: $("mkTidy").checked,
+    music: $("mkMusic").checked ? "on" : "off", soundscapes: $("mkSounds").checked ? "on" : "off" };
+  if (engine) choices.engine = engine;
+  const r = await api(`/api/projects/${book.id}/settings`, { json: choices });
+  if (!r.ok) { $("mkStart").disabled = false; $("mkStart").textContent = "Start"; alert(r.error || "Couldn't save the choices."); return; }
+  Object.assign(book, { narrator: choices.narrator, tidyPending: choices.tidy, music: choices.music, soundscapes: choices.soundscapes,
+    engine: engine || book.engine });
+  $("makeDlg").close();
+  startJob("all", { video: $("mkVideo").checked && !$("mkVideoRow").hidden });
+};
+$("stopJob").onclick = async () => {
+  if (!confirm("Stop? What's done so far is kept: press the button again later to carry on from there.")) return;
+  $("stopJob").disabled = true; $("stopJob").textContent = "Stopping…";
+  $("runDetail").textContent = "Stopping: recording stops straight away; anything else finishes the step it's on first.";
+  await api(`/api/projects/${book.id}/stop`, { method: "POST" });
+};
 function stopPolling() { if (poll) clearInterval(poll); poll = null; }
 function startPolling() {
   stopPolling();
@@ -453,9 +521,13 @@ function whoClass(name) {
 }
 function renderTidy() {
   const n = $("tidyNote"), t = book.tidyResult;
-  n.hidden = !(book.tidyPending || t);
-  if (book.tidyPending) n.textContent = "The spelling and sentences will be cleaned up before anything is cast or recorded.";
-  else if (t) n.textContent = `Writing cleaned up: ${t.changed} of ${t.sections} sections changed; sentence problems ${t.before} → ${t.after}.`;
+  const w = book.adultWording || 0;
+  n.hidden = !(book.tidyPending || t || w);
+  let msg = "";
+  if (book.tidyPending) msg = "The spelling and sentences will be cleaned up before anything is cast or recorded.";
+  else if (t) msg = `Writing cleaned up: ${t.changed} of ${t.sections} sections changed; sentence problems ${t.before} → ${t.after}.`;
+  if (w) msg += `${msg ? " " : ""}“Young girl” and “young boy” were changed to “young woman” and “young man” in ${w} place${w === 1 ? "" : "s"}, since everyone in a grown-up book is an adult.`;
+  n.textContent = msg;
 }
 $("tidyBtn").onclick = async () => {
   if (!confirm("Clean up the spelling and sentences of the whole book? Changed sections are cast again, and their lines are recorded again next time you record.")) return;

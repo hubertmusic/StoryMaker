@@ -338,7 +338,7 @@ small.opt { font-weight: 400; color: var(--muted); }
 
 /* work running on any of your devices (remakes, rewrites) */
 .active-jobs { display: grid; gap: 8px; margin: 6px 0 4px; }
-.active-job { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(120px, 1fr) minmax(0, 1.4fr); gap: 14px;
+.active-job { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(120px, 1fr) minmax(0, 1.4fr) auto; gap: 14px;
   align-items: center; background: var(--shelf); border-radius: 12px; padding: 10px 14px; font-size: 15px; }
 .active-job .meter { margin: 0; }
 .aj-what { font-weight: 700; }
@@ -408,3 +408,13 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .checks .warn .mark { color: #f2c46d; }
 .checks .bad { color: #ffb4a8; }
 .checks .bad .mark { color: #ff8a7a; }
+
+/* Stop buttons and the "ready to start" check */
+.job-meter .stop-btn { margin-top: 6px; width: auto; padding-left: 22px; padding-right: 22px; }
+#stopStory { margin-top: 10px; width: auto; padding-left: 22px; padding-right: 22px; }
+.confirm-start { border: 1px solid var(--line, rgba(127,127,127,.35)); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+.confirm-start .cs-title { font-weight: 600; margin: 0 0 6px; }
+.confirm-start ul { margin: 0 0 10px; padding-left: 20px; }
+.confirm-start li { margin: 2px 0; }
+.confirm-start .cs-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.active-job .small-btn { justify-self: start; }

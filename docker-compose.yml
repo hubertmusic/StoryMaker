@@ -7,6 +7,7 @@ services:
       dockerfile: web/Dockerfile
     container_name: storymaker
     restart: unless-stopped
+    init: true          # tidies up finished background jobs (and ones you stop) so none linger
     ports:
       - "8095:3000"
     environment:

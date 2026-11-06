@@ -333,6 +333,7 @@ function showPreview(jobId, st) {
 function poll(jobId, data) {
   clearInterval(polling);
   followingId = jobId;
+  $("stopStory").hidden = false; $("stopStory").disabled = false; $("stopStory").textContent = "Stop";
   polling = setInterval(async () => {
     const st = await api(`/api/status/${jobId}`);
     if (st.state === "running" || st.state === "queued") {
@@ -344,17 +345,30 @@ function poll(jobId, data) {
       setMeter(100, "Done");
       clearInterval(polling);
       followingId = null;
+      $("stopStory").hidden = true;
       showResult(st.result);
       loadLibrary();
       loadSeries();
+    } else if (st.state === "stopped") {
+      clearInterval(polling);
+      followingId = null;
+      $("stopStory").hidden = true;
+      setMeter(st.progress || 0, "Stopped");
+      show("progressView");
+      showError(st.detail || "Stopped. What was already made is kept in Unfinished stories.");
+      loadUnfinished();
     } else if (st.state === "failed") {
       clearInterval(polling);
       followingId = null;
+      $("stopStory").hidden = true;
       show("progressView");
       showError(`${st.error} Press Make it again to pick up where it stopped — nothing already made is paid for twice.`);
     }
   }, 2000);
 }
+$("stopStory").addEventListener("click", () => {
+  if (followingId) stopJob(followingId, "making this story? What's already written is kept, and you can carry it on later", $("stopStory"));
+});
 
 function mediaBlock(s) {
   const wrap = document.createElement("div");
@@ -535,13 +549,42 @@ function jobMeter() {
   };
   return box;
 }
-function followJob(jobId, meter, done, fail) {
+// Stop anything that's being made. Asks first; what's done so far is kept where it can be.
+async function stopJob(jobId, what, button) {
+  if (!confirm(`Stop ${what}?`)) return false;
+  if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+  const r = await api(`/api/jobs/${jobId}/stop`, {});
+  if (!r.ok && button) { button.disabled = false; button.textContent = "Stop"; alert(r.error || "Couldn't stop it."); }
+  return r.ok;
+}
+function followJob(jobId, meter, done, fail, what = "this") {
+  const stop = document.createElement("button");
+  stop.type = "button"; stop.className = "small-btn warn stop-btn"; stop.textContent = "Stop";
+  stop.addEventListener("click", () => stopJob(jobId, what, stop));
+  meter.appendChild(stop);
   const t = setInterval(async () => {
     const st = await api(`/api/status/${jobId}`);
     if (st.state === "running" || st.state === "queued") meter.set(st.progress || 0, st.state === "queued" ? "Getting started…" : st.detail);
-    else if (st.state === "done") { clearInterval(t); meter.set(100, "Done"); done(st); }
-    else if (st.state === "failed" || st.ok === false) { clearInterval(t); fail(st.error || "It stopped."); }
+    else if (st.state === "done") { clearInterval(t); stop.remove(); meter.set(100, "Done"); done(st); }
+    else if (st.state === "stopped") { clearInterval(t); stop.remove(); meter.set(st.progress || 0, "Stopped"); fail(st.detail || "Stopped."); }
+    else if (st.state === "failed" || st.ok === false) { clearInterval(t); stop.remove(); fail(st.error || "It stopped."); }
   }, 2000);
+}
+// The choices, once more, before anything starts: Start, or Change to go back and pick again.
+function confirmStart(panel, go, title, lines, startLabel, onStart) {
+  const old = panel.querySelector(".confirm-start"); if (old) old.remove();
+  const box = document.createElement("div"); box.className = "confirm-start";
+  const h = document.createElement("p"); h.className = "cs-title"; h.textContent = title;
+  const ul = document.createElement("ul");
+  for (const l of lines) { const li = document.createElement("li"); li.textContent = l; ul.appendChild(li); }
+  const row = document.createElement("div"); row.className = "cs-row";
+  const yes = document.createElement("button"); yes.type = "button"; yes.className = "go go-small"; yes.textContent = startLabel;
+  const back = document.createElement("button"); back.type = "button"; back.className = "small-btn"; back.textContent = "Change";
+  row.append(yes, back); box.append(h, ul, row);
+  go.hidden = true; go.after(box);
+  back.addEventListener("click", () => { box.remove(); go.hidden = false; go.disabled = false; go.focus(); });
+  yes.addEventListener("click", () => { box.remove(); go.hidden = false; onStart(); });
+  yes.focus();
 }
 
 function storyTools(s, id, el) {
@@ -627,14 +670,18 @@ function storyTools(s, id, el) {
     const go = document.createElement("button"); go.className = "go"; go.type = "button"; go.textContent = "Clean it up";
     const msg = document.createElement("p"); msg.className = "settings-msg";
     p.append(note, ...(c.has_audio ? [rl] : []), go, msg);
-    go.addEventListener("click", async () => {
+    go.addEventListener("click", () => confirmStart(p, go, "Ready to clean up the writing:", [
+      `${c.problems || 0} sentence problem${c.problems === 1 ? "" : "s"} found; every scene is checked`,
+      "Events, names, style, heat and sounds stay as they are",
+      c.has_audio ? (rc.checked ? "Then the audio is remade (only changed lines are recorded again)" : "The audio is left as it is") : "No audio to remake",
+    ], "Start cleaning up", async () => {
       go.disabled = true;
       const r = await api(`/api/stories/${encodeURIComponent(id)}/cleanup`, { remake: rc.checked });
       if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
       const m = jobMeter(); p.appendChild(m);
       followJob(r.job_id, m, (st) => { msg.className = "settings-msg"; msg.textContent = cleanupSummary(st); setTimeout(() => refreshCard(id, el), 2500); },
-        (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });
-    });
+        (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; }, "cleaning up this story");
+    }));
   }
 
   async function rewritePanel() {
@@ -668,7 +715,7 @@ function storyTools(s, id, el) {
       const r = await api(`/api/stories/${encodeURIComponent(id)}/rewrite`, { target: sel.value, instructions: ins.value, remake: rc.checked, keywords: kw.value });
       if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
       const m = jobMeter(); p.appendChild(m);
-      followJob(r.job_id, m, () => refreshCard(id, el), (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });
+      followJob(r.job_id, m, () => refreshCard(id, el), (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; }, "rewriting this story");
     });
   }
 
@@ -848,15 +895,19 @@ function storyTools(s, id, el) {
     const msg = document.createElement("p"); msg.className = "settings-msg";
     p.append(vl, sl, ...(features.localPictures ? [dl] : []), go, msg);
     area.appendChild(p);
+    if (quick) p.querySelector(".level-note").textContent = "The text changed since the audio was made. Pick what to redo, then remake it: the changed lines are recorded and everything else is reused.";
     const start = async () => {
       go.disabled = true;
       const r = await api(`/api/stories/${encodeURIComponent(id)}/remaster`, { revoice: vc.checked, redesign: scb.checked, redraw: dcb.checked });
       if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
       const m = jobMeter(); p.appendChild(m);
-      followJob(r.job_id, m, () => refreshCard(id, el), (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });
+      followJob(r.job_id, m, () => refreshCard(id, el), (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; }, "remaking the audio");
     };
-    go.addEventListener("click", start);
-    if (quick) start();
+    go.addEventListener("click", () => confirmStart(p, go, "Ready to remake the audio:", [
+      vc.checked ? "New voices are chosen for the characters" : "The same voices as before (only changed lines are recorded)",
+      scb.checked ? "The sounds are picked again" : "The same sounds as before",
+      ...(features.localPictures ? [dcb.checked ? "New pictures are drawn for the video and picture book" : "The same pictures as before"] : []),
+    ], "Start the remake", start));
   }
   return wrap;
 }
@@ -1002,13 +1053,21 @@ async function cleanupAll() {
   const msg = document.createElement("p"); msg.className = "settings-msg";
   bar.append(go, close);
   box.append(hint, rows, rl, bar, msg);
-  go.addEventListener("click", async () => {
-    go.disabled = true;
-    const res = await api("/api/cleanup", { ids: boxes.filter((c) => c.checked).map((c) => c.value), remake: rc.checked });
-    if (!res.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = res.error; return; }
-    const m = jobMeter(); box.insertBefore(m, msg);
-    followJob(res.job_id, m, (st) => { msg.className = "settings-msg"; msg.textContent = cleanupSummary(st); loadLibrary(); },
-      (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; });
+  go.addEventListener("click", () => {
+    const picked = boxes.filter((c) => c.checked);
+    const names = picked.map((c) => (list.find((x) => x.run_id === c.value) || {}).title || c.value);
+    confirmStart(box, go, `Ready to clean up ${picked.length} stor${picked.length === 1 ? "y" : "ies"}:`, [
+      names.length > 4 ? `${names.slice(0, 4).join(", ")} and ${names.length - 4} more` : names.join(", "),
+      "One after another, in the background (you can close the page)",
+      rc.checked ? "Each story's audio is remade afterwards (only changed lines)" : "The audio is left as it is",
+    ], "Start cleaning up", async () => {
+      go.disabled = true;
+      const res = await api("/api/cleanup", { ids: picked.map((c) => c.value), remake: rc.checked });
+      if (!res.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = res.error; return; }
+      const m = jobMeter(); box.insertBefore(m, msg);
+      followJob(res.job_id, m, (st) => { msg.className = "settings-msg"; msg.textContent = cleanupSummary(st); loadLibrary(); },
+        (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; loadLibrary(); }, "cleaning up these stories");
+    });
   });
 }
 $("cleanupAllBtn").addEventListener("click", cleanupAll);
@@ -1125,7 +1184,9 @@ async function checkActive() {
     bar.appendChild(fill);
     const det = document.createElement("span"); det.className = "aj-detail";
     det.textContent = `${j.progress || 0}%${j.detail ? ` · ${j.detail}` : ""}`;
-    row.append(what, bar, det);
+    const stop = document.createElement("button"); stop.type = "button"; stop.className = "small-btn warn"; stop.textContent = "Stop";
+    stop.addEventListener("click", async () => { if (await stopJob(j.id, (JOB_NAMES[j.kind] || "this").toLowerCase(), stop)) setTimeout(checkActive, 3000); });
+    row.append(what, bar, det, stop);
     return row;
   }));
   box.hidden = !others.length;

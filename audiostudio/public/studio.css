@@ -227,3 +227,18 @@ dialog#voiceLib { width: min(720px, calc(100vw - 32px)); }
 /* pictures and video */
 .video-block { margin-top: 14px; }
 .book-video { width: 100%; border-radius: 10px; margin-top: 10px; background: #000; }
+
+/* a running book in the library, with its Stop button beside it */
+.book-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.stop-row { color: var(--rose, #e58f8f); border: 1px solid currentColor; }
+
+/* the choices before an audiobook is made */
+dialog#makeDlg { width: min(560px, calc(100vw - 32px)); }
+#makeDlg .mk-group { border: 0; padding: 0; margin: 14px 0; display: grid; gap: 8px; }
+#makeDlg .mk-group legend { font-weight: 700; margin-bottom: 6px; padding: 0; }
+#makeDlg .field { margin: 14px 0; display: grid; gap: 6px; }
+#makeDlg select { width: 100%; }
+#makeDlg .check { margin-top: 0; }
+.mk-plan { margin: 16px 0; padding: 12px 14px 12px 34px; border-radius: 12px; background: var(--shelf-2, rgba(255,255,255,.05)); display: grid; gap: 4px; }
+.mk-plan .mk-plan-h { font-weight: 700; list-style: none; margin-left: -20px; }
+.mk-buttons { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }

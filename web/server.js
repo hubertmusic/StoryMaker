@@ -331,7 +331,7 @@ app.get("/api/jobs/active", (req, res) => {
     let st, age;
     try { st = JSON.parse(fs.readFileSync(f, "utf8")); age = Date.now() - fs.statSync(f).mtimeMs; } catch { continue; }
     const live = (st.state === "running" || st.state === "queued") && age < 60 * 60 * 1000;
-    const justDone = (st.state === "done" || st.state === "failed") && age < 10 * 60 * 1000;
+    const justDone = (st.state === "done" || st.state === "failed" || st.state === "stopped") && age < 10 * 60 * 1000;
     if (!live && !justDone) continue;
     let info = {};
     try { info = JSON.parse(j.info || "{}"); } catch { /* old row */ }
@@ -353,7 +353,12 @@ function jobScenes(id) {
   return names;
 }
 function jobOutline(id) {
-  try { return JSON.parse(fs.readFileSync(path.join(jobFolder(id), "outline.json"), "utf8")); } catch { return null; }
+  try { return JSON.parse(fs.readFileSync(path.join(jobFolder(id), "outline.json"), "utf8")); } catch { /* none */ }
+  try {                                    // a story that was fully written before it stopped (voices, video…)
+    const st = JSON.parse(fs.readFileSync(path.join(jobFolder(id), "story.json"), "utf8"));
+    return { title: st.title, logline: st.logline, written: (st.scenes || []).length,
+      chapters: [{ scenes: st.scenes || [] }], scenesText: (st.scenes || []).map((x) => x.narration || "") };
+  } catch { return null; }
 }
 app.get("/api/jobs/unfinished", (req, res) => {
   const rows = db.prepare("SELECT * FROM jobs WHERE user_id = ? AND kind = 'make' AND created > datetime('now', '-60 days') "
@@ -364,7 +369,7 @@ app.get("/api/jobs/unfinished", (req, res) => {
     let st = {}, age = 0;
     try { st = JSON.parse(fs.readFileSync(f, "utf8")); age = Date.now() - fs.statSync(f).mtimeMs; } catch { continue; }
     const stale = (st.state === "running" || st.state === "queued") && age > 60 * 60 * 1000;
-    if (st.state !== "failed" && !stale) continue;
+    if (st.state !== "failed" && st.state !== "stopped" && !stale) continue;
     const scenes = jobScenes(j.id), outline = jobOutline(j.id);
     if (!scenes.length && !outline) continue;              // nothing was written: nothing to find
     let info = {};
@@ -372,8 +377,9 @@ app.get("/api/jobs/unfinished", (req, res) => {
     const planned = outline && Array.isArray(outline.chapters)
       ? outline.chapters.reduce((n, c) => n + ((c.scenes || []).length || 0), 0) : 0;
     out.push({ id: j.id, title: (outline && outline.title) || st.title || "Untitled story", idea: info.idea || "",
-      level: (info.body && info.body.level) || null, started: j.created, written: scenes.length, planned,
-      error: stale ? "It was cut off (StoryMaker or the Mac restarted)." : (st.error || ""),
+      level: (info.body && info.body.level) || null, started: j.created,
+      written: scenes.length || (outline && outline.written) || 0, planned,
+      error: stale ? "It was cut off (StoryMaker or the Mac restarted)." : st.state === "stopped" ? "You stopped it." : (st.error || ""),
       canResume: !!(info.body || outline) });
   }
   res.json({ ok: true, stories: out });
@@ -387,6 +393,7 @@ app.get("/api/jobs/:id/text", (req, res) => {
   const parts = [`# ${outline.title || "Untitled story"}`, ""];
   if (outline.logline) parts.push(`*${outline.logline}*`, "");
   let lastCh = 0;
+  if (!jobScenes(id).length && outline.scenesText) for (const t of outline.scenesText) parts.push(t.trim(), "");
   for (const name of jobScenes(id)) {
     const [, c] = name.match(/^scene_c(\d+)_s(\d+)/).map(Number);
     if (c !== lastCh && chapters.length > 1) {
@@ -395,7 +402,7 @@ app.get("/api/jobs/:id/text", (req, res) => {
     }
     try { parts.push(fs.readFileSync(path.join(jobFolder(id), name), "utf8").trim(), ""); } catch { /* skip */ }
   }
-  res.json({ ok: true, text: parts.join("\n"), written: jobScenes(id).length });
+  res.json({ ok: true, text: parts.join("\n"), written: jobScenes(id).length || outline.written || 0 });
 });
 app.post("/api/jobs/:id/resume", async (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
@@ -429,11 +436,60 @@ setTimeout(async () => {
   for (const id of CUT_OFF) {
     const j = db.prepare("SELECT * FROM jobs WHERE id = ? AND kind = 'make' AND created > datetime('now', '-2 days')").get(id);
     const u = j && db.prepare("SELECT * FROM users WHERE id = ?").get(j.user_id);
-    if (!j || !u || !fs.existsSync(path.join(jobFolder(id), "outline.json"))) continue;
+    if (!j || !u || !jobOutline(id)) continue;
     const r = await recoverJob(u, j);
     console.log(`Carrying on story ${id} after the restart: ${r.ok ? "started" : r.error}`);
   }
 }, Number(process.env.RECOVER_DELAY_SECONDS || 300) * 1000);   // not straight away: the Mac may still be starting up
+
+// Stop: anything being made (a story, a remake, a clean-up, a rewrite). The background copy of StoryMaker that's
+// doing it is asked to stop (it saves "stopped" and keeps what it made so far); if it hasn't stopped in 20 seconds
+// it, and everything it started (voices, ffmpeg), is ended.
+function jobPid(id, st) {
+  if (st && Number.isInteger(st.pid) && st.pid > 1) return st.pid;
+  try { return parseInt(fs.readFileSync(path.join(jobFolder(id), "running.pid"), "utf8"), 10) || null; } catch { return null; }
+}
+function isStorymaker(pid) {
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("storymaker"); } catch { return false; }
+}
+function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+function markStopped(f, st, why) {
+  try {
+    const now = JSON.parse(fs.readFileSync(f, "utf8"));
+    if (now.state === "running" || now.state === "queued") {
+      fs.writeFileSync(f, JSON.stringify({ ...now, state: "stopped", detail: why, error: null }));
+    }
+  } catch { if (st) fs.writeFileSync(f, JSON.stringify({ ...st, state: "stopped", detail: why })); }
+}
+app.post("/api/jobs/:id/stop", (req, res) => {
+  const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
+  if (!id || !ownJob(req.user, id)) return res.status(404).json({ ok: false, error: "Not found." });
+  const f = path.join(OUTPUT_DIR, ".jobs", `${id}.status.json`);
+  let st = null;
+  try { st = JSON.parse(fs.readFileSync(f, "utf8")); } catch { return res.json({ ok: false, error: "That isn't running." }); }
+  if (st.state !== "running" && st.state !== "queued") return res.json({ ok: true, state: st.state });
+  const wrote = !!jobOutline(id) || jobScenes(id).length > 0;
+  const why = st.kind && st.kind !== "make" ? "Stopped." : wrote
+    ? "Stopped. What was already made is kept: carry it on from Unfinished stories, or delete it there."
+    : "Stopped before anything was written. Nothing was kept or spent.";
+  const pid = jobPid(id, st);
+  if (!pid || !alive(pid) || !isStorymaker(pid)) {         // nothing is actually running it any more
+    markStopped(f, st, why);
+    return res.json({ ok: true, state: "stopped" });
+  }
+  const signal = (sig) => { try { process.kill(-pid, sig); } catch { try { process.kill(pid, sig); } catch { /* gone */ } } };
+  signal("SIGTERM");
+  let waited = 0;
+  const check = setInterval(() => {
+    waited += 1;
+    if (!alive(pid) || waited >= 20) {
+      clearInterval(check);
+      if (alive(pid)) signal("SIGKILL");
+      markStopped(f, st, why);
+    }
+  }, 1000);
+  res.json({ ok: true, state: "stopping" });
+});
 
 app.delete("/api/jobs/:id", (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");

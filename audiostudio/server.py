@@ -307,10 +307,10 @@ def keep_style(user, pid):
 
 
 def tidy_after_import(pid, clean):
-    """"Clean up the writing" was chosen: the book's writing is cleaned up first, in the background."""
+    """"Clean up the writing" was chosen: it's marked to be cleaned up first, but nothing starts until you've
+    checked the choices and pressed Start."""
     if clean:
         E.start_tidy(cfg, pid)
-        worker.submit(pid, "tidy")
 
 
 @app.post("/api/import/storymaker")
@@ -440,11 +440,12 @@ def project(pid: str, user=Depends(current_user)):
     st["queued_or_running"] = st.get("state") in ("queued", "running")
     return {"ok": True, "id": pid, "title": p["title"], "level": p["level"], "engine": p.get("engine"),
             "voiceModel": p.get("voice_model") or cfg.get("CHATTERBOX_MODEL", "standard"), "acting": p.get("acting", 1.0),
-            "music": p.get("music", "on"),
+            "music": p.get("music", "on"), "soundscapes": p.get("soundscapes", "on"),
+            "soundsAvailable": cfg.get("SOUNDSCAPES", "on").lower() == "on",
             "narrator": p.get("narrator"), "cast": p["cast"], "castDone": p.get("cast_done", False),
             "soundsDone": p.get("sounds_done", False), "soundWishes": p.get("sound_wishes", ""),
             "narratorLines": p.get("narrator_lines", 0), "words": p.get("words", 0), "source": p.get("source"),
-            "tidyPending": p.get("tidy_pending", False), "tidyResult": p.get("tidy_result"),
+            "tidyPending": p.get("tidy_pending", False), "tidyResult": p.get("tidy_result"), "adultWording": p.get("adult_wording", 0),
             "chapters": chapters, "status": st, "files": files_of(d, p)}
 
 
@@ -468,9 +469,24 @@ def settings(pid: str, body: dict = Body(...), user=Depends(current_user)):
             pass
     if body.get("music") in ("on", "off"):
         p["music"] = body["music"]
+    if body.get("soundscapes") in ("on", "off"):
+        p["soundscapes"] = body["soundscapes"]
+    if "narrator" in body:
+        n = str(body.get("narrator") or "")
+        if n == "" or n.startswith("kokoro:") or n in {v["id"] for v in E.voice_library(cfg)}:
+            p["narrator"] = n
+            p["narrator_chosen"] = bool(n)
     if isinstance(body.get("title"), str) and body["title"].strip():
         p["title"] = body["title"].strip()[:120]
     E.save_project(d, p)
+    if "tidy" in body:                            # clean up the writing first (again), or not
+        if body["tidy"]:
+            if not p.get("tidy_pending"):
+                E.start_tidy(cfg, pid)
+        elif p.get("tidy_pending"):
+            d, p, _ = E.load_project(cfg, pid)
+            p["tidy_pending"] = False
+            E.save_project(d, p)
     return {"ok": True}
 
 
@@ -518,6 +534,8 @@ def job(pid: str, body: dict = Body(...), user=Depends(current_user)):
         kw["only"] = [sec["id"] for ch in p["chapters"] for sec in ch["sections"]]
     if kind == "sounds":
         kw["redo"] = bool(body.get("redo"))
+    if kind == "all" and body.get("video"):
+        kw["video"] = True                        # pictures and a video once the audiobook is made
     if kind == "record" and isinstance(body.get("chapters"), list):
         kw["chapters"] = [int(c) for c in body["chapters"] if str(c).isdigit()][:500]
     if kind in ("record", "all") and (p.get("engine") or cfg["STUDIO_ENGINE"]) == "chatterbox" \

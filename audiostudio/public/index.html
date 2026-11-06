@@ -217,6 +217,36 @@
   <form method="dialog" class="dlg-float"><button class="float-close">Close</button></form>
 </dialog>
 
+<dialog id="makeDlg" aria-labelledby="makeH">
+  <form method="dialog" class="dlg-x"><button class="x-btn" aria-label="Close" title="Close">&times;</button></form>
+  <h3 id="makeH" class="panel-h">Before it starts</h3>
+  <p class="hint" id="makeIntro">Pick how this book is made. Nothing starts until you press Start.</p>
+  <fieldset class="mk-group">
+    <legend>Voices</legend>
+    <label class="engine"><input type="radio" name="mkEngine" value="chatterbox">
+      <span><strong>Chatterbox</strong> natural and expressive. About as long as the book itself to record.</span></label>
+    <label class="engine"><input type="radio" name="mkEngine" value="kokoro">
+      <span><strong>Kokoro</strong> fast. Clear and smooth, less acting. A few minutes per hour of book.</span></label>
+  </fieldset>
+  <div class="field">
+    <label for="mkNarrator">Narrator</label>
+    <select id="mkNarrator"></select>
+    <p class="hint">Characters get their own voices when the cast is found (change them in step 1 at any time).</p>
+  </div>
+  <fieldset class="mk-group">
+    <legend>What to include</legend>
+    <label class="check"><input type="checkbox" id="mkTidy"> <span id="mkTidyLabel">Clean up the spelling and sentences first</span></label>
+    <label class="check" id="mkSoundsRow"><input type="checkbox" id="mkSounds"> Background sounds and effects</label>
+    <label class="check"><input type="checkbox" id="mkMusic"> Background music</label>
+    <label class="check" id="mkVideoRow"><input type="checkbox" id="mkVideo"> Then draw pictures and make a video</label>
+  </fieldset>
+  <ul class="mk-plan" id="mkPlan"></ul>
+  <div class="mk-buttons">
+    <button type="button" class="go" id="mkStart">Start</button>
+    <button type="button" class="quiet" id="mkCancel">Not yet</button>
+  </div>
+</dialog>
+
 <dialog id="settingsDlg" aria-labelledby="setH">
   <form method="dialog" class="dlg-x"><button class="x-btn" aria-label="Close" title="Close">&times;</button></form>
   <h3 id="setH" class="panel-h">Settings</h3>

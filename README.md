@@ -736,3 +736,17 @@ switch on, the way you would.
   this off: `DRAW_THINGS_ALWAYS_ON=off`.
 - If a Draw Things update moves the setting somewhere else, the studio log says it couldn't find the switch;
   turn it on by hand until StoryMaker is updated for the new layout.
+
+## 19. Stop anything, and check before it starts
+
+- **Stop** is under every progress bar: a story being made, a remake, a clean-up, a rewrite, and the jobs from
+  other devices listed at the top. It asks first, then stops within a few seconds.
+- **A stopped story isn't lost.** What it wrote is kept in *Unfinished stories*: press **Recover** to carry on
+  from where it stopped, read what's written, or delete it. If it's stopped before anything was written,
+  nothing is kept or spent.
+- **A stopped remake** leaves the story marked "remake the audio to match": its sound may be half-made until you
+  remake it. A stopped clean-up keeps the stories it finished.
+- **Remake the audio** and **Clean up the writing** show what they're about to do (voices, sounds, pictures,
+  remaking the audio afterwards) with **Start** and **Change**, and nothing starts until you press Start. That
+  includes "Remake the audio to match": it opens the choices instead of starting by itself.
+

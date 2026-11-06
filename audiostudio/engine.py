@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "2.6 (Nov 5)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "2.8 (Nov 6)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -168,22 +168,35 @@ def new_project(cfg, owner, title, level, chapters, source, cast=None):
     slug = sm.slugify(title)[:40] or "book"
     pid = f"{slug}-{hashlib.sha1(f'{title}{time.time()}'.encode()).hexdigest()[:6]}"
     d = studio_dir(cfg) / "projects" / pid
-    d.mkdir(parents=True)
-    words = 0
+    words = swapped = 0
     for ch in chapters:
         ch.pop("front_title", None)
     for ci, ch in enumerate(chapters):
+        if level == "explicit":
+            ch["title"], k = sm.adult_wording(ch.get("title", ""))
+            swapped += k
         for si, sec in enumerate(ch["sections"]):
             sec["id"] = f"c{ci + 1:03d}s{si + 1:03d}"
             # line wraps inside a paragraph (plain-text books, pasted text) are undone; paragraphs stay apart
             sec["text"] = sm.normalize_quotes(re.sub(r"[ \t]*(?<!\n)\n(?!\n)[ \t]*", " ", sec["text"].strip()))
+            if level == "explicit":                   # "young girl" → "young woman": everyone here is an adult
+                sec["text"], k = sm.adult_wording(sec["text"])
+                swapped += k
             words += len(sec["text"].split())
     p = {"id": pid, "title": title.strip()[:120] or "Untitled", "owner": owner, "level": level, "source": source,
          "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "engine": cfg["STUDIO_ENGINE"], "narrator": "",
          "cast": cast or [], "chapters": chapters, "words": words, "cast_done": False, "sounds_done": False}
     if level == "explicit":
-        sm.check_adult_only(" ".join(sec["text"] for ch in chapters for sec in ch["sections"]))
+        title_, k = sm.adult_wording(p["title"])
+        p["title"], swapped = title_, swapped + k
+        sm.check_adult_only(" ".join([p["title"]] + [ch.get("title", "") for ch in chapters] +
+                                     [sec["text"] for ch in chapters for sec in ch["sections"]]), where="this book")
+        if swapped:
+            p["adult_wording"] = swapped
+            log(f"\"{p['title']}\": changed “young girl/boy” to “young woman/man” in {swapped} "
+                f"place{'s' if swapped != 1 else ''} (everyone in a grown-up book is an adult).")
     s = {"sections": {sec["id"]: segment_section(sec["text"]) for ch in chapters for sec in ch["sections"]}}
+    d.mkdir(parents=True)                         # only once it passed the checks (no empty folder left behind)
     save_project(d, p, s)
     return pid
 
@@ -1252,6 +1265,7 @@ class Chatterbox:
     _inst = None
     _lock = threading.Lock()
     _avail = None
+    aborting = False                   # Stop pressed: the line being recorded is abandoned straight away
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -1349,6 +1363,9 @@ class Chatterbox:
                             f"({r.get('mem', 0) / 1024 ** 3:.1f} GB after {self.lines} lines).")
                         self.stop()
                     return
+                if r.get("died") and Chatterbox.aborting:       # Stop was pressed: it was ended on purpose
+                    self.proc = None
+                    raise StopJob()
                 if r.get("oom") or r.get("died"):
                     log(f"Chatterbox needs a fresh start ({r.get('error', '')[:120]}); trying that line again.")
                     self.stop()
@@ -1469,6 +1486,7 @@ class Worker:
         self.queue = []
         self.cv = threading.Condition()
         self.stop_flags = {}
+        self.current = None
         threading.Thread(target=self._loop, daemon=True).start()
 
     def submit(self, pid, kind, **kw):
@@ -1484,9 +1502,19 @@ class Worker:
             self.cv.notify()
 
     def stop(self, pid):
+        """Stop this book's job: a waiting one is taken off the list; a running one stops at once if it's
+        recording with Chatterbox (the line being read is abandoned), otherwise at the end of the step it's on."""
         self.stop_flags[pid] = True
         with self.cv:
             self.queue = [j for j in self.queue if j[0] != pid]
+        if self.current == pid:
+            cb = Chatterbox._inst
+            if cb and cb.proc:
+                Chatterbox.aborting = True
+                try:
+                    cb.proc.kill()
+                except Exception:
+                    pass
 
     def _loop(self):
         while True:
@@ -1494,39 +1522,53 @@ class Worker:
                 while not self.queue:
                     self.cv.wait()
                 pid, kind, kw = self.queue.pop(0)
-            self.stop_flags[pid] = False
             try:
-                d = project_dir(self.cfg, pid)
-            except ValueError:
-                continue
-            def progress(frac, detail, **extra):
-                if self.stop_flags.get(pid):
-                    raise StopJob()
-                write_status(d, state="running", job=kind, progress=round(100 * max(0, min(1, frac))), detail=detail,
-                             **extra)
-            for tries in range(1, 7):
-                try:
-                    self._run(d, pid, kind, kw, progress)
-                    break
-                except StopJob:
+                self._one(pid, kind, kw)
+            except Exception:                       # never let one job's trouble stop every job after it
+                traceback.print_exc()
+            finally:
+                self.current = None
+                Chatterbox.aborting = False
+
+    def _one(self, pid, kind, kw):
+        self.stop_flags[pid] = False
+        self.current = pid
+        Chatterbox.aborting = False
+        try:
+            d = project_dir(self.cfg, pid)
+        except ValueError:
+            return
+        def progress(frac, detail, **extra):
+            if self.stop_flags.get(pid):
+                raise StopJob()
+            write_status(d, state="running", job=kind, progress=round(100 * max(0, min(1, frac))), detail=detail,
+                         **extra)
+        for tries in range(1, 7):
+            try:
+                self._run(d, pid, kind, kw, progress)
+                break
+            except StopJob:
+                write_status(d, state="stopped", detail="Stopped. Start again to carry on where it left off.")
+                break
+            except Exception as e:
+                if self.stop_flags.get(pid):            # it broke because it was being stopped
                     write_status(d, state="stopped", detail="Stopped. Start again to carry on where it left off.")
                     break
-                except Exception as e:
-                    traceback.print_exc()
-                    memory = re.search(r"out of memory|stopped unexpectedly|MPS|Metal|killed", str(e), re.I)
-                    if memory and tries < 6 and not self.stop_flags.get(pid):
-                        # a memory problem: clear everything out, wait a moment, and carry on by itself
-                        if Chatterbox._inst:
-                            Chatterbox._inst.idle()
-                        free_ollama(self.cfg)
-                        log(f"Memory ran short ({str(e)[:100]}); clearing it and carrying on (try {tries + 1} of 6).")
-                        write_status(d, state="running", job=kind, error=None,
-                                     detail=f"Clearing memory and carrying on (try {tries + 1} of 6)…")
-                        time.sleep(30)
-                        continue
-                    write_status(d, state="failed", error=str(e)[:400],
-                                 detail="Something went wrong. Start again to carry on where it left off.")
-                    break
+                traceback.print_exc()
+                memory = re.search(r"out of memory|stopped unexpectedly|MPS|Metal|killed", str(e), re.I)
+                if memory and tries < 6 and not self.stop_flags.get(pid):
+                    # a memory problem: clear everything out, wait a moment, and carry on by itself
+                    if Chatterbox._inst:
+                        Chatterbox._inst.idle()
+                    free_ollama(self.cfg)
+                    log(f"Memory ran short ({str(e)[:100]}); clearing it and carrying on (try {tries + 1} of 6).")
+                    write_status(d, state="running", job=kind, error=None,
+                                 detail=f"Clearing memory and carrying on (try {tries + 1} of 6)…")
+                    time.sleep(30)
+                    continue
+                write_status(d, state="failed", error=str(e)[:400],
+                             detail="Something went wrong. Start again to carry on where it left off.")
+                break
 
     def _run(self, d, pid, kind, kw, progress):
         write_status(d, state="running", job=kind, progress=0, detail="Starting", error=None)
@@ -1547,9 +1589,15 @@ class Worker:
             _, p, _ = load_project(self.cfg, pid)
             if not p.get("cast_done"):
                 run_casting(self.cfg, pid, lambda f, t: progress(f * 0.1, t))
-            if not p.get("sounds_done") and self.cfg["SOUNDSCAPES"].lower() == "on":
+            sounds = self.cfg["SOUNDSCAPES"].lower() == "on" and p.get("soundscapes", "on") == "on"
+            if not p.get("sounds_done") and sounds:
                 run_sounds(self.cfg, pid, lambda f, t: progress(0.1 + f * 0.05, t))
-            run_record(self.cfg, pid, lambda f, t, **x: progress(0.15 + f * 0.85, t, **x))
+            if kw.get("video"):
+                run_record(self.cfg, pid, lambda f, t, **x: progress(0.15 + f * 0.6, t, **x))
+                write_status(d, state="running", job="video", progress=75, detail="Drawing the pictures", error=None)
+                run_video(self.cfg, pid, lambda f, t, **x: progress(0.75 + f * 0.25, t))
+            else:
+                run_record(self.cfg, pid, lambda f, t, **x: progress(0.15 + f * 0.85, t, **x))
         write_status(d, state="done", progress=100, detail="Finished")
 
 
@@ -1664,7 +1712,8 @@ def mix_chapter(cfg, rcfg, d, p, s, ci, plan, engine):
     ch = p["chapters"][ci]
     sig = hashlib.sha1(json.dumps([[it[0], it[1]["text"], it[2], it[3], it[4]] for it in plan] +
                                   [sec.get("sound") for sec in ch["sections"]] +
-                                  [engine, cfg.get("SOUNDSCAPES"), cfg.get("VOICE_POLISH"), cfg.get("AMBIENCE_VOLUME"),
+                                  [engine, cfg.get("SOUNDSCAPES"), p.get("soundscapes", "on"), cfg.get("VOICE_POLISH"),
+                                   cfg.get("AMBIENCE_VOLUME"),
                                    cfg.get("EFFECTS_VOLUME"), p.get("music", "on"), cfg.get("MUSIC_VOLUME"),
                                    cfg.get("MUSIC_MODE"), "bed3"], sort_keys=True).encode()).hexdigest()[:12]
     final = d / "out" / "chapters" / f"{ci + 1:03d}.flac"
@@ -1711,9 +1760,9 @@ def mix_chapter(cfg, rcfg, d, p, s, ci, plan, engine):
             music = sm.pick_music(rcfg, p.get("genre", ""), p.get("music_choice"), p["id"], p["level"])
         except Exception as e:
             log(f"No music ({str(e)[:100]})")
-    if cfg["SOUNDSCAPES"].lower() == "on" or music:
-        bed, credits = sm.build_bed(rcfg, story, timeline, job, p["level"], music,
-                                    with_sounds=cfg["SOUNDSCAPES"].lower() == "on")
+    with_sounds = cfg["SOUNDSCAPES"].lower() == "on" and p.get("soundscapes", "on") == "on"
+    if with_sounds or music:
+        bed, credits = sm.build_bed(rcfg, story, timeline, job, p["level"], music, with_sounds=with_sounds)
         if credits:
             cred = d / "out" / "credits.json"
             allc = json.loads(cred.read_text()) if cred.exists() else {}
@@ -1867,9 +1916,11 @@ def update_script(cfg, pid, changes):
         if ch.get("emotion") in EMOTIONS:
             seg["emotion"] = ch["emotion"]
         if isinstance(ch.get("text"), str) and ch["text"].strip():
+            text = ch["text"]
             if p["level"] == "explicit":
-                sm.check_adult_only(ch["text"])
-            seg["text"] = sm.normalize_quotes(ch["text"].strip()).strip("“”")
+                text = sm.adult_wording(text)[0]
+                sm.check_adult_only(text, where="that line")
+            seg["text"] = sm.normalize_quotes(text.strip()).strip("“”")
     count_lines(p, s)
     save_project(d, p, s)
 

@@ -113,6 +113,17 @@ To have it start by itself whenever the Mac starts, run `./autostart.sh`. To sto
 
 The first Chatterbox recording downloads its voice model, which is a few GB, one time only.
 
+## Choices first, and Stop
+
+Bringing a book in never starts anything. **Make the audiobook** (or **Make it again**) opens *Before it starts*:
+Chatterbox or Kokoro, the narrator, whether to clean up the spelling and sentences first, background sounds,
+music, and whether to draw pictures and make a video afterwards. It lists what it will do; nothing starts until
+you press **Start**.
+
+**Stop** is beside the progress at the top of a book, and beside any book that's working in the library.
+Recording stops at once (the line being read is dropped); other steps finish the step they're on first.
+Everything already recorded is kept, so pressing the button again carries on from there.
+
 ## Hiding grown-up books
 
 **Settings** (top right) has the same **Show Mature and Explicit** switch as StoryMaker. It's one switch for both
