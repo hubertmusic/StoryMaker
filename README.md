@@ -750,3 +750,13 @@ switch on, the way you would.
   remaking the audio afterwards) with **Start** and **Change**, and nothing starts until you press Start. That
   includes "Remake the audio to match": it opens the choices instead of starting by itself.
 
+## 20. Free writers' limits (Groq)
+
+Groq's free plan allows about 8,000 tokens a minute (roughly three scenes) and a daily total. StoryMaker no
+longer stops when it's turned away: it waits as long as the writer says (up to 15 minutes) and carries on, and
+with Groq it paces itself so it rarely gets turned away at all. Long stories take longer on the free plan.
+
+If the day's allowance runs out partway, the rest of the story is written by Ollama on the Mac, so it still
+finishes (`GROQ_FALLBACK=off` in storymaker.env stops instead; the story waits in Unfinished stories for
+**Recover**). The same waiting applies to Claude, Gemini and OpenAI when they're busy.
+

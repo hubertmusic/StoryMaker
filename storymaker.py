@@ -91,6 +91,7 @@ DEFAULTS = {
     "OPENAI_TEXT_MODEL": "gpt-5-mini",
     "GROQ_API_KEY": "",
     "GROQ_MODEL": "openai/gpt-oss-120b",
+    "GROQ_FALLBACK": "ollama",                    # Groq's free allowance used up: carry on with Ollama (off = stop)
     "OLLAMA_URL": "http://localhost:11434",  # in Docker on a Mac: http://host.docker.internal:11434
     "OLLAMA_MODEL": "llama3.1:8b",
 
@@ -471,6 +472,112 @@ def extract_json(text):
     return json.loads(text[start:end + 1])
 
 
+class WriterLimit(RuntimeError):
+    """An online writer's allowance is used up for longer than it's worth waiting."""
+
+
+_PATIENCE = 15 * 60                    # wait up to this long for a writer's allowance to free up
+
+
+def _duration(text):
+    """'19.215s', '1m2.5s', '7m12s', '1h3m' → seconds."""
+    m = re.fullmatch(r"\s*(?:(\d+)h)?\s*(?:(\d+)m(?!s))?\s*(?:([\d.]+)s)?\s*", text or "")
+    if not m or not any(m.groups()):
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            return None
+    h, mi, se = m.groups()
+    return int(h or 0) * 3600 + int(mi or 0) * 60 + float(se or 0)
+
+
+def _wait_hint(r):
+    """How long the service says to wait before asking again."""
+    ra = r.headers.get("retry-after")
+    if ra:
+        w = _duration(ra)
+        if w is not None:
+            return w
+    m = re.search(r"(?:try again|retry)\s+in\s+((?:\d+h)?(?:\d+m(?!s))?(?:[\d.]+s)?)", r.text or "", re.I)
+    if m:
+        return _duration(m.group(1))
+    m = re.search(r'"retryDelay"\s*:\s*"([\d.]+)s"', r.text or "")       # Gemini
+    return float(m.group(1)) if m else None
+
+
+def _say_wait(seconds):
+    s_ = int(round(seconds))
+    if s_ < 90:
+        return f"{s_} seconds"
+    if s_ < 5400:
+        return f"{round(s_ / 60)} minutes"
+    return f"{s_ / 3600:.1f} hours"
+
+
+_GROQ = {"remaining": None, "reset_at": 0.0}
+
+
+def _groq_pace(msgs):
+    """Groq's free plan allows a set number of tokens a minute and says, with every reply, how many are left.
+    Wait just long enough when the next scene wouldn't fit, instead of being turned away."""
+    need_ = sum(len(m["content"]) for m in msgs) / 3.5 + 600
+    left, reset_at = _GROQ["remaining"], _GROQ["reset_at"]
+    if left is not None and left < need_ and reset_at > time.time():
+        wait = min(65.0, reset_at - time.time()) + 0.5
+        log(f"Pacing for Groq's free plan: waiting {_say_wait(wait)} for its per-minute allowance…")
+        time.sleep(wait)
+
+
+def _groq_note(r):
+    try:
+        _GROQ["remaining"] = int(r.headers.get("x-ratelimit-remaining-tokens"))
+        _GROQ["reset_at"] = time.time() + (_duration(r.headers.get("x-ratelimit-reset-tokens", "")) or 0)
+    except (TypeError, ValueError):
+        pass
+
+
+def post_patiently(who, url, headers, body, timeout, msgs=None):
+    """POST to an online writer. "Too many requests" and "busy" replies are waited out (as long as the service
+    says, up to 15 minutes) and tried again, instead of stopping the whole story."""
+    waited = 0.0
+    for attempt in range(12):
+        if who == "Groq" and msgs:
+            _groq_pace(msgs)
+        r = requests.post(url, headers=headers, json=body, timeout=timeout)
+        if who == "Groq":
+            _groq_note(r)
+        if r.status_code not in (429, 500, 502, 503, 504, 529):
+            return r
+        hint = _wait_hint(r)
+        wait = hint if hint is not None else min(60.0, 5.0 * 2 ** attempt)
+        daily = bool(re.search(r"per day|\(TPD\)|\(RPD\)|daily|quota", r.text or "", re.I))
+        if wait > _PATIENCE or waited + wait > 2 * _PATIENCE or (daily and wait > 120):
+            raise WriterLimit(f"{who}'s free allowance is used up for now; it frees up in about {_say_wait(wait)}. "
+                              "What's written so far is kept: press Recover in Unfinished stories later, or pick "
+                              f"another writer. ({who} said: {r.text[:200]})")
+        log(f"{who} says it's had too many requests ({r.status_code}); waiting {_say_wait(wait)} and trying again…")
+        time.sleep(wait + 1)
+        waited += wait
+    return r
+
+
+def _switch_to_ollama(cfg):
+    """Groq's allowance for today is used up: carry on with Ollama on the Mac, if it's there (GROQ_FALLBACK=ollama).
+    The rest of this story is written by Ollama, so it isn't left half-done."""
+    if str(cfg.get("GROQ_FALLBACK", "ollama")).lower() != "ollama":
+        return False
+    models = ollama_ready(cfg)
+    if models is None:
+        open_mac_app(cfg, "ollama")
+        models = ollama_ready(cfg)
+    want = str(cfg.get("OLLAMA_MODEL") or "")
+    if not models or not any(m == want or m.split(":")[0] == want.split(":")[0] for m in models):
+        return False
+    log(f"Groq's free allowance is used up for now, so the rest of this story is written by Ollama ({want}) on the Mac.")
+    cfg["STORY_PROVIDER"] = "ollama"
+    return True
+
+
 def ask_writer(cfg, prompt, as_json=True, system=None):
     """Send one prompt to the chosen writer. Returns its JSON reply (one retry if malformed), or with
     as_json=False its plain text. `system` is a standing instruction for the writer."""
@@ -478,44 +585,49 @@ def ask_writer(cfg, prompt, as_json=True, system=None):
     msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
     for attempt in range(2):
         if provider == "claude":
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": need(cfg, "ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01",
-                         "content-type": "application/json"},
-                json={"model": cfg["CLAUDE_MODEL"], "max_tokens": 12000, **({"system": system} if system else {}),
-                      "messages": [{"role": "user", "content": prompt}]},
-                timeout=300)
+            r = post_patiently(
+                "Claude", "https://api.anthropic.com/v1/messages",
+                {"x-api-key": need(cfg, "ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"},
+                {"model": cfg["CLAUDE_MODEL"], "max_tokens": 12000, **({"system": system} if system else {}),
+                 "messages": [{"role": "user", "content": prompt}]},
+                300)
             if r.status_code != 200:
                 raise RuntimeError(f"Claude API error {r.status_code}: {r.text[:500]}")
             text = "".join(b.get("text", "") for b in r.json().get("content", []))
         elif provider == "gemini":
-            r = requests.post(
-                f"{GEMINI_BASE}/models/{cfg['GEMINI_TEXT_MODEL']}:generateContent",
-                headers={"x-goog-api-key": need(cfg, "GEMINI_API_KEY"), "content-type": "application/json"},
-                json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                      **({"systemInstruction": {"parts": [{"text": system}]}} if system else {}),
-                      "generationConfig": {"responseMimeType": "application/json"} if as_json else {}},
-                timeout=300)
+            r = post_patiently(
+                "Gemini", f"{GEMINI_BASE}/models/{cfg['GEMINI_TEXT_MODEL']}:generateContent",
+                {"x-goog-api-key": need(cfg, "GEMINI_API_KEY"), "content-type": "application/json"},
+                {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                 **({"systemInstruction": {"parts": [{"text": system}]}} if system else {}),
+                 "generationConfig": {"responseMimeType": "application/json"} if as_json else {}},
+                300)
             if r.status_code != 200:
                 raise RuntimeError(f"Gemini API error {r.status_code}: {r.text[:500]}")
             text = "".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"])
         elif provider == "openai":
-            r = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {need(cfg, 'OPENAI_API_KEY')}", "content-type": "application/json"},
-                json={"model": cfg["OPENAI_TEXT_MODEL"], "messages": msgs,
-                      **({"response_format": {"type": "json_object"}} if as_json else {})},
-                timeout=300)
+            r = post_patiently(
+                "OpenAI", "https://api.openai.com/v1/chat/completions",
+                {"Authorization": f"Bearer {need(cfg, 'OPENAI_API_KEY')}", "content-type": "application/json"},
+                {"model": cfg["OPENAI_TEXT_MODEL"], "messages": msgs,
+                 **({"response_format": {"type": "json_object"}} if as_json else {})},
+                300)
             if r.status_code != 200:
                 raise RuntimeError(f"OpenAI API error {r.status_code}: {r.text[:500]}")
             text = r.json()["choices"][0]["message"]["content"]
         elif provider == "groq":
-            r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {need(cfg, 'GROQ_API_KEY')}", "content-type": "application/json"},
-                json={"model": cfg["GROQ_MODEL"], "max_tokens": 8000, "messages": msgs,
-                      **({"response_format": {"type": "json_object"}} if as_json else {})},
-                timeout=300)
+            try:
+                r = post_patiently(
+                    "Groq", "https://api.groq.com/openai/v1/chat/completions",
+                    {"Authorization": f"Bearer {need(cfg, 'GROQ_API_KEY')}", "content-type": "application/json"},
+                    {"model": cfg["GROQ_MODEL"], "max_tokens": 8000, "messages": msgs,
+                     **({"response_format": {"type": "json_object"}} if as_json else {})},
+                    300, msgs)
+            except WriterLimit:
+                if not _switch_to_ollama(cfg):
+                    raise
+                return ask_writer(cfg, prompt, as_json, system)
             if r.status_code != 200:
                 raise RuntimeError(f"Groq API error {r.status_code}: {r.text[:500]}")
             text = r.json()["choices"][0]["message"]["content"]
