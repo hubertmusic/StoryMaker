@@ -91,6 +91,9 @@ DEFAULTS = {
     "OPENAI_TEXT_MODEL": "gpt-5-mini",
     "GROQ_API_KEY": "",
     "GROQ_MODEL": "openai/gpt-oss-120b",
+    "GROQ_TPM": "8000",                           # Groq's tokens-a-minute allowance (8000 on the free plan)
+    "GROQ_REASONING": "auto",                     # how hard gpt-oss thinks: auto (plan hard, scenes medium,
+                                                  # fixes briefly), or low / medium / high for everything
     "GROQ_FALLBACK": "ollama",                    # Groq's free allowance used up: carry on with Ollama (off = stop)
     "OLLAMA_URL": "http://localhost:11434",  # in Docker on a Mac: http://host.docker.internal:11434
     "OLLAMA_MODEL": "llama3.1:8b",
@@ -517,10 +520,22 @@ def _say_wait(seconds):
 _GROQ = {"remaining": None, "reset_at": 0.0}
 
 
-def _groq_pace(msgs):
+def _tokens(msgs):
+    """A cautious guess at how many tokens these messages are (Groq counts about 3–4 characters a token)."""
+    return int(sum(len(m["content"]) for m in msgs) / 3.2) + 60
+
+
+def groq_budget(cfg, msgs):
+    """How long a reply to ask Groq for. Groq counts the question AND the longest reply asked for against its
+    per-minute allowance (8,000 tokens on the free plan), so asking for 8,000 tokens of reply can never fit."""
+    allowance = int(cfg.get("GROQ_TPM") or 8000)
+    return max(1024, min(8000, allowance - 300 - _tokens(msgs)))
+
+
+def _groq_pace(msgs, reply=0):
     """Groq's free plan allows a set number of tokens a minute and says, with every reply, how many are left.
     Wait just long enough when the next scene wouldn't fit, instead of being turned away."""
-    need_ = sum(len(m["content"]) for m in msgs) / 3.5 + 600
+    need_ = _tokens(msgs) + (reply or 600)
     left, reset_at = _GROQ["remaining"], _GROQ["reset_at"]
     if left is not None and left < need_ and reset_at > time.time():
         wait = min(65.0, reset_at - time.time()) + 0.5
@@ -542,10 +557,23 @@ def post_patiently(who, url, headers, body, timeout, msgs=None):
     waited = 0.0
     for attempt in range(12):
         if who == "Groq" and msgs:
-            _groq_pace(msgs)
+            _groq_pace(msgs, body.get("max_tokens", 0))
         r = requests.post(url, headers=headers, json=body, timeout=timeout)
         if who == "Groq":
             _groq_note(r)
+        if r.status_code == 413 and "max_tokens" in body:
+            # "Request too large": the question plus the longest reply allowed is more than the per-minute
+            # allowance. Ask for a shorter reply (a scene needs far less than the most it's allowed).
+            m = re.search(r"Limit\s+(\d+),\s*Requested\s+(\d+)", r.text or "")
+            over = int(m.group(2)) - int(m.group(1)) if m else 1500
+            shorter = body["max_tokens"] - over - 300
+            if shorter >= 1024:
+                log(f"{who}: that request was a little too big for the free plan; asking for a shorter reply…")
+                body = {**body, "max_tokens": shorter}
+                continue
+            raise WriterLimit(f"This part of the story is too big for {who}'s free plan in one go (it asked for "
+                              f"{m.group(2) if m else 'more than'} tokens; the plan allows "
+                              f"{m.group(1) if m else 'fewer'} a minute). ({r.text[:200]})")
         if r.status_code not in (429, 500, 502, 503, 504, 529):
             return r
         hint = _wait_hint(r)
@@ -578,9 +606,22 @@ def _switch_to_ollama(cfg):
     return True
 
 
-def ask_writer(cfg, prompt, as_json=True, system=None):
+# How hard Groq's gpt-oss thinks before it answers (GROQ_REASONING=auto): hard when planning the story (few requests,
+# and where a story gets well thought out), a fair amount for each scene, briefly for small fixes.
+THINKING = {"plan": "high", "write": "medium", "fix": "low"}
+LESS_THINKING = {"high": "medium", "medium": "low"}
+
+
+def thinking_for(cfg, think):
+    chosen = str(cfg.get("GROQ_REASONING") or "auto").lower()
+    return chosen if chosen in ("low", "medium", "high") else THINKING.get(think or "write", "medium")
+
+
+def ask_writer(cfg, prompt, as_json=True, system=None, think=None):
     """Send one prompt to the chosen writer. Returns its JSON reply (one retry if malformed), or with
-    as_json=False its plain text. `system` is a standing instruction for the writer."""
+    as_json=False its plain text. `system` is a standing instruction for the writer. `think` says what kind of
+    request it is — "plan" (the plot), "write" (a scene) or "fix" (spelling, sentences, sound cues) — so a writer
+    that thinks first (Groq's gpt-oss) can think as hard as the job needs."""
     provider = cfg["STORY_PROVIDER"].lower()
     msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
     for attempt in range(2):
@@ -617,20 +658,31 @@ def ask_writer(cfg, prompt, as_json=True, system=None):
                 raise RuntimeError(f"OpenAI API error {r.status_code}: {r.text[:500]}")
             text = r.json()["choices"][0]["message"]["content"]
         elif provider == "groq":
-            try:
-                r = post_patiently(
-                    "Groq", "https://api.groq.com/openai/v1/chat/completions",
-                    {"Authorization": f"Bearer {need(cfg, 'GROQ_API_KEY')}", "content-type": "application/json"},
-                    {"model": cfg["GROQ_MODEL"], "max_tokens": 8000, "messages": msgs,
-                     **({"response_format": {"type": "json_object"}} if as_json else {})},
-                    300, msgs)
-            except WriterLimit:
-                if not _switch_to_ollama(cfg):
-                    raise
-                return ask_writer(cfg, prompt, as_json, system)
-            if r.status_code != 200:
-                raise RuntimeError(f"Groq API error {r.status_code}: {r.text[:500]}")
-            text = r.json()["choices"][0]["message"]["content"]
+            effort = thinking_for(cfg, think) if "gpt-oss" in cfg["GROQ_MODEL"] else None
+            while True:
+                try:
+                    r = post_patiently(
+                        "Groq", "https://api.groq.com/openai/v1/chat/completions",
+                        {"Authorization": f"Bearer {need(cfg, 'GROQ_API_KEY')}", "content-type": "application/json"},
+                        {"model": cfg["GROQ_MODEL"], "max_tokens": groq_budget(cfg, msgs), "messages": msgs,
+                         # gpt-oss thinks before it writes, and the thinking counts against the allowance too
+                         **({"reasoning_effort": effort} if effort else {}),
+                         **({"response_format": {"type": "json_object"}} if as_json else {})},
+                        300, msgs)
+                except WriterLimit:
+                    if not _switch_to_ollama(cfg):
+                        raise
+                    return ask_writer(cfg, prompt, as_json, system, think)
+                if r.status_code != 200:
+                    raise RuntimeError(f"Groq API error {r.status_code}: {r.text[:500]}")
+                choice = r.json()["choices"][0]
+                text = (choice.get("message") or {}).get("content") or ""
+                if choice.get("finish_reason") == "length" and effort in LESS_THINKING:
+                    # it thought so long the answer was cut off: ask again, thinking a little less
+                    log(f"Groq thought so long its answer got cut off; asking again with {LESS_THINKING[effort]} thinking…")
+                    effort = LESS_THINKING[effort]
+                    continue
+                break
         elif provider == "ollama":
             try:
                 r = requests.post(f"{cfg['OLLAMA_URL'].rstrip('/')}/api/chat",
@@ -853,7 +905,7 @@ def proofread(cfg, text, system=None, extra=""):
     if cfg.get("PROOFREAD", "on") != "on" or cfg["STORY_PROVIDER"].lower() == "demo" or len(text.split()) < 40:
         return text
     try:
-        new = clean_prose(ask_writer(cfg, PROOF_PROMPT.format(text=text, extra=extra), as_json=False, system=system))
+        new = clean_prose(ask_writer(cfg, PROOF_PROMPT.format(text=text, extra=extra), as_json=False, system=system, think="fix"))
     except Exception as e:
         log(f"Proofreading skipped ({str(e)[:100]})")
         return text
@@ -1070,7 +1122,7 @@ def fix_sentences(cfg, text, system=None, names=(), rounds=2, extra="", pov=""):
         listed = "\n".join(f"{k + 1}. \"{s[:300]}\": {p}" for k, (s, p) in enumerate(issues[:14]))
         try:
             new = clean_prose(ask_writer(cfg, SENTENCE_FIX_PROMPT.format(issues=listed, text=text, extra=extra),
-                                         as_json=False, system=system))
+                                         as_json=False, system=system, think="fix"))
         except Exception as e:
             log(f"Sentence fixing skipped ({str(e)[:100]})")
             break
@@ -1425,7 +1477,7 @@ def adult_guard(cfg, text, system=None):
         if attempt == 2 or cfg.get("STORY_PROVIDER", "").lower() == "demo":
             break
         log(f"Taking “{hit}” out of an explicit scene (no flashbacks, everyone stays an adult)…")
-        new = clean_prose(ask_writer(cfg, CLEAN_PROMPT.format(text=text), as_json=False, system=system))
+        new = clean_prose(ask_writer(cfg, CLEAN_PROMPT.format(text=text), as_json=False, system=system, think="fix"))
         if len(new.split()) > 0.6 * len(text.split()):
             text = new
     trimmed = drop_youth_sentences(text)
@@ -1811,7 +1863,7 @@ def write_prose_story(cfg, idea, genre, audience, rules, scenes, series_text, ch
         outline = ask_writer(cfg, OUTLINE_PROMPT.format(
             chapters=chapters, visual="illustrations", idea=idea or "Continue the story with a fresh new adventure.",
             genre=genre, audience=audience, rules=rules, series=series_text, scenes=scenes,
-            keywords=keywords_block(cfg.get("_KEYWORDS"), whole=True)), system=system)
+            keywords=keywords_block(cfg.get("_KEYWORDS"), whole=True)), system=system, think="plan")
     chs = (outline.get("chapters") or [])[:chapters]
     chs += [{"title": f"Chapter {i + 1}", "summary": "Continue the story."} for i in range(len(chs), chapters)]
     for ch in chs:
@@ -1955,7 +2007,7 @@ def write_chapters(cfg, idea, genre, audience, rules, scenes, clip_mode, series_
             chapters=chapters, visual=visual, idea=idea or "Continue the story with a fresh new adventure.",
             genre=genre, audience=audience, rules=rules, series=series_text, scenes=scenes,
             keywords=keywords_block(cfg.get("_KEYWORDS"), whole=True)),
-            system=EXPLICIT_SYSTEM if cfg.get("_ADULT_ONLY") else None)
+            system=EXPLICIT_SYSTEM if cfg.get("_ADULT_ONLY") else None, think="plan")
     chs = (outline.get("chapters") or [])[:chapters]
     if len(chs) < chapters:
         chs += [{"title": f"Chapter {i + 1}", "summary": "Continue the story."} for i in range(len(chs), chapters)]
@@ -2166,7 +2218,8 @@ def plan_shots(cfg, story):
         try:
             got = ask_writer(cfg, SHOT_PLAN_PROMPT.format(
                 title=story.get("title", ""), style=story.get("visual_style") or DEFAULT_LOOK,
-                characters=story.get("characters", ""), extra=extra, n=len(batch), scenes=listed), system=system)
+                characters=story.get("characters", ""), extra=extra, n=len(batch), scenes=listed), system=system,
+                think="fix")
             got = got.get("pictures") if isinstance(got, dict) else []
         except Exception as e:
             log(f"Illustration ideas skipped for a few scenes ({str(e)[:100]})")
@@ -3440,7 +3493,7 @@ def plan_sounds(cfg, story, level, redo=False):
                 r = ask_writer(cfg, SOUND_PROMPT.format(title=story["title"], genre=story.get("genre", ""),
                                                          audience=audience, max_fx=max_fx, rules=rules, scenes=text,
                                                          wishes=wl),
-                               system=system)
+                               system=system, think="fix")
                 for item in r.get("scenes") or []:
                     k = int(item.get("scene", 0)) - 1
                     if 0 <= k < len(batch):

@@ -760,3 +760,8 @@ If the day's allowance runs out partway, the rest of the story is written by Oll
 finishes (`GROQ_FALLBACK=off` in storymaker.env stops instead; the story waits in Unfinished stories for
 **Recover**). The same waiting applies to Claude, Gemini and OpenAI when they're busy.
 
+Groq also counts the longest reply StoryMaker *allows* against that 8,000, so each request is sized to fit
+(`GROQ_TPM`, raise it if you upgrade), and gpt-oss thinks as hard as each job needs (`GROQ_REASONING=auto`): hard when planning the plot and chapters,
+a fair amount for each scene, briefly for spelling and sentence fixes. If an answer is ever cut off because it
+thought too long, that request is asked again with a little less thinking.
+
