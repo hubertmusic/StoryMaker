@@ -898,3 +898,26 @@ everything done so far, so another story or book can go first. Resume carries on
 - A series keeps its own picture style from episode to episode; pick one on the form only to change it for one
   episode.
 
+
+## 26. Listening: read along, pick up anywhere, offline, podcast feed, bedtime
+
+- **Read along:** under a story's player, *Read along* shows the words with the line being read lit up. Tap any
+  line to jump there. It remembers whether you like it open.
+- **Chapters:** the *Chapter* list jumps straight to a chapter (older stories get theirs from the audiobook).
+- **Speed** (0.8× to 1.5×) and a **sleep timer** (10 minutes to an hour, or the end of the chapter). The sound fades
+  out over the last few seconds.
+- **Pick up where you stopped:** the place is saved to your account every few seconds, so a story stopped on the Mac
+  carries on from there on your phone. The library shows a thin bar for how far you got.
+- **Offline:** *Save for offline* keeps a story on that phone or iPad so it plays with no connection (on a plane, in
+  the car). Add StoryMaker to the Home Screen (Share → Add to Home Screen) and it opens like an app. This needs the
+  secure https address. On the server, run `sudo tailscale serve --bg 8095` once, then use
+  `https://<server-name>.<your-tailnet>.ts.net`. The app is always fetched fresh while you're online, so updates show
+  up right away; the saved copy is only used offline.
+- **Podcast feed:** *Podcast feed* in the Library gives you a private address. Add it in Apple Podcasts (Library → ⋯
+  → Follow a Show by URL) and every story with audio arrives as an episode, with chapters and its cover. Anyone with
+  the address can listen, so *New address* switches the old one off. Explicit stories stay out unless you tick them in.
+  Apps that fetch feeds on their own servers can't reach a private address. If the feed address shows the wrong name,
+  set `PUBLIC_URL=https://<server-name>.<your-tailnet>.ts.net` in storymaker.env.
+- **Bedtime story** (a tick box on the form): calm and safe from start to finish, slowing down towards a cosy ending,
+  with quieter sounds and music and a slightly slower narrator. It's marked *Bedtime* in the library, and its player
+  opens dimmed with a 20-minute sleep timer set.

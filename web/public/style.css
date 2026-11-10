@@ -477,3 +477,50 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .bc-rm { justify-self: start; align-self: end; }
 .bible-eps { margin: 0 0 12px; padding-left: 22px; display: grid; gap: 6px; font-size: .92rem; }
 @media (max-width: 560px) { .bible-char { grid-template-columns: 1fr; } .bc-pic { width: 88px; height: 88px; } }
+
+/* ── listening: read along, chapters, speed, sleep timer ── */
+.player audio { width: 100%; }
+.listen { margin-top: 10px; }
+.listen-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.listen-field { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
+.listen-field select { max-width: 220px; padding: 6px 8px; font-size: 14px; }
+.sleep-left { font-size: 14px; color: var(--glass); font-variant-numeric: tabular-nums; }
+.listen-bar .quiet { padding: 7px 12px; font-size: 14px; }
+.listen-where { margin: 8px 0 0; font-size: 14px; color: var(--muted); min-height: 0; }
+.listen-where:empty { display: none; }
+.linkish { background: none; border: 0; padding: 0; color: var(--lamp); font: inherit; text-decoration: underline; cursor: pointer; }
+.readalong {
+  margin-top: 12px; max-height: 260px; overflow-y: auto; padding: 14px 18px; border-radius: var(--radius-sm);
+  background: var(--shelf); border: 1px solid var(--line); font: 400 19px/1.7 var(--serif); color: var(--muted);
+  overscroll-behavior: contain;
+}
+.readalong h4 { font: 400 15px/1.3 var(--sans); color: var(--lamp); margin: 14px 0 4px; }
+.readalong h4:first-child { margin-top: 0; }
+.readalong p { margin: 0 0 12px; }
+.readalong .cue { cursor: pointer; border-radius: 4px; transition: color .2s, background-color .2s; }
+.readalong .cue:hover { color: var(--paper); }
+.readalong .cue.now { color: var(--lamp-ink); background: var(--lamp); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+@media (prefers-reduced-motion: reduce) { .readalong .cue { transition: none; } }
+
+/* bedtime: the player dims to a warm, low-light look */
+.player.bedtime { background: #14172b; border-radius: var(--radius-lg); padding: 12px; }
+.player.bedtime video, .player.bedtime audio { filter: brightness(.82) sepia(.15); }
+.player.bedtime .readalong { background: #191c33; color: #8f8aa6; border-color: #2b3055; }
+.player.bedtime .readalong .cue.now { background: #6b5320; color: #f6e4bf; }
+.player.bedtime .downloads a { opacity: .7; }
+
+/* library: badges, how far you got, offline */
+.cover { position: relative; }
+.badge { position: absolute; top: 8px; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.bedtime-badge { left: 8px; background: #14172b; color: var(--lamp); border: 1px solid var(--lamp); }
+.saved-badge { right: 8px; background: var(--glass); color: #10302a; }
+.listened { height: 4px; background: var(--shelf-2); margin: 0 14px 12px; border-radius: 2px; overflow: hidden; }
+.listened span { display: block; height: 100%; background: var(--lamp); }
+.cover.unavailable { opacity: .45; }
+.offline-note { margin: 8px 0 14px; }
+
+/* podcast feed panel */
+.feed-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
+.feed-row input[type="text"] { flex: 1 1 260px; min-width: 0; font-size: 14px; }
+.feed-how { padding-left: 20px; margin: 8px 0; }
+.feed-how li { margin-bottom: 4px; }

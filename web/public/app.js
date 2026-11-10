@@ -28,6 +28,7 @@ function formData() {
     video: $("video").value,
     writer: $("writer").value,
     portrait: $("portrait").checked,
+    bedtime: $("bedtime").checked,
     // the next episode keeps its series' look unless you picked another one for it on purpose
     pictureStyle: kind === "next" && !pictureStyleTouched ? "" : (document.querySelector('input[name="pictureStyle"]:checked') || {}).value,
     useStyle: $("useStyle").checked,
@@ -383,6 +384,8 @@ $("pauseStory").addEventListener("click", async () => {
 
 function mediaBlock(s) {
   const wrap = document.createElement("div");
+  wrap.className = "player" + (s.bedtime ? " bedtime" : "");
+  let m = null;
   if (s.video_url || s.video) {
     const v = document.createElement("video");
     v.controls = true; v.preload = "metadata"; v.src = s.video_url || s.video; v.playsInline = true;
@@ -393,16 +396,17 @@ function mediaBlock(s) {
       Object.assign(t, { kind: "captions", srclang: "en", label: "English", src: subs });
       v.appendChild(t);
     }
-    wrap.appendChild(v);
+    wrap.appendChild(v); m = v;
   } else if (s.audio_url || s.audio) {
     const a = document.createElement("audio");
-    a.controls = true; a.src = s.audio_url || s.audio;
-    wrap.appendChild(a);
+    a.controls = true; a.preload = "metadata"; a.src = s.audio_url || s.audio;
+    wrap.appendChild(a); m = a;
   }
+  const sid = s.id || s.run_id;
+  if (m && sid && s.id) wrap.appendChild(listenTools(s, m));
   const links = document.createElement("div");
   links.className = "downloads";
   const add = (href, label) => { if (!href) return; const a = document.createElement("a"); a.href = href; a.textContent = label; a.download = ""; links.appendChild(a); };
-  const sid = s.id || s.run_id;
   add(s.video_url || s.video, "Video");
   if (sid && (s.audiobook || s.audiobook_file)) add(`/api/stories/${encodeURIComponent(sid)}/audio/m4b`, "Audiobook (M4B, chapters)");
   if (sid && (s.audio || s.audio_url)) add(`/api/stories/${encodeURIComponent(sid)}/audio/mp3`, "Audio (MP3)");
@@ -415,6 +419,232 @@ function mediaBlock(s) {
   add(s.credits, "Sound credits");
   wrap.appendChild(links);
   return wrap;
+}
+
+// ── listening: read along, chapters, speed, sleep timer, picking up where you stopped, saving for offline ──
+const clock = (t) => {
+  t = Math.max(0, Math.floor(t || 0));
+  const h = Math.floor(t / 3600), mm = Math.floor((t % 3600) / 60), ss = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+};
+function parseVtt(text) {
+  const sec = (x) => { const p = x.trim().split(":").map(parseFloat); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]; };
+  const cues = [];
+  for (const block of text.replace(/\r/g, "").split(/\n\n+/)) {
+    const lines = block.split("\n");
+    const i = lines.findIndex((l) => l.includes("-->"));
+    if (i < 0) continue;
+    const [a, b] = lines[i].split("-->");
+    const words = lines.slice(i + 1).join(" ").replace(/<[^>]+>/g, "").trim();
+    if (words) cues.push({ start: sec(a), end: sec(b.trim().split(/\s/)[0]), text: words });
+  }
+  return cues;
+}
+let sleepTimer = null;           // one sleep timer for the whole page
+function listenTools(s, m) {
+  const id = s.id;
+  const box = document.createElement("div"); box.className = "listen";
+  const bar = document.createElement("div"); bar.className = "listen-bar";
+  const field = (label, el) => { const l = document.createElement("label"); l.className = "listen-field"; const t = document.createElement("span"); t.textContent = label; l.append(t, el); return l; };
+  const select = (opts, val) => { const x = document.createElement("select"); for (const [v, t] of opts) { const o = document.createElement("option"); o.value = v; o.textContent = t; x.appendChild(o); } x.value = val; return x; };
+
+  // chapters
+  const chSel = select([["", "Start"]], "");
+  const chField = field("Chapter", chSel); chField.hidden = true;
+  let chapters = [];
+  chSel.addEventListener("change", () => { const c = chapters[+chSel.value]; if (c) { m.currentTime = c.start + 0.05; m.play().catch(() => {}); } });
+
+  // speed
+  const prefs = readerPrefs();
+  const speed = select([["0.8", "0.8×"], ["0.9", "0.9×"], ["1", "1×"], ["1.1", "1.1×"], ["1.25", "1.25×"], ["1.5", "1.5×"]], String(prefs.rate || 1));
+  const setRate = () => { m.playbackRate = parseFloat(speed.value) || 1; m.defaultPlaybackRate = m.playbackRate; };
+  speed.addEventListener("change", () => { setRate(); saveReaderPrefs({ ...readerPrefs(), rate: parseFloat(speed.value) }); });
+  m.addEventListener("loadedmetadata", setRate);
+
+  // sleep timer
+  const sleep = select([["", "Off"], ["10", "10 min"], ["20", "20 min"], ["30", "30 min"], ["45", "45 min"], ["60", "1 hour"], ["chapter", "End of chapter"]], s.bedtime ? "20" : "");
+  const sleepLeft = document.createElement("span"); sleepLeft.className = "sleep-left";
+  const startSleep = () => {
+    if (sleepTimer) { clearInterval(sleepTimer.tick); sleepTimer = null; }
+    sleepLeft.textContent = "";
+    if (!sleep.value) return;
+    const until = sleep.value === "chapter" ? null : Date.now() + parseInt(sleep.value, 10) * 60000;
+    const chapterEnd = () => { const t = m.currentTime; const n = chapters.find((c) => c.start > t + 1); return n ? n.start : (m.duration || Infinity); };
+    const stopAt = sleep.value === "chapter" ? chapterEnd() : null;
+    const vol = m.volume;
+    const t = { tick: setInterval(() => {
+      if (m.paused && !until) return;
+      const left = until ? (until - Date.now()) / 1000 : (stopAt - m.currentTime) / (m.playbackRate || 1);
+      sleepLeft.textContent = left > 0 ? `${clock(left)} left` : "";
+      if (left <= 8 && left > 0) m.volume = Math.max(0, vol * (left / 8));      // a gentle fade at the end
+      if (left <= 0) {
+        m.pause(); m.volume = vol; clearInterval(t.tick); sleepTimer = null;
+        sleep.value = ""; sleepLeft.textContent = "Stopped by the sleep timer";
+      }
+    }, 1000) };
+    sleepTimer = t;
+  };
+  sleep.addEventListener("change", startSleep);
+  m.addEventListener("play", () => { if (sleep.value && !sleepTimer) startSleep(); }, { once: false });
+
+  // read along
+  const raBtn = document.createElement("button"); raBtn.type = "button"; raBtn.className = "quiet"; raBtn.textContent = "Read along";
+  raBtn.hidden = !s.subtitles;
+  const ra = document.createElement("div"); ra.className = "readalong"; ra.hidden = true;
+  ra.setAttribute("aria-label", "The words, highlighted as they're read. Tap a line to go there.");
+  let cueEls = [], cues = [], current = -1;
+  const showReadAlong = async () => {
+    if (!cues.length) {
+      try { cues = parseVtt(await fetch(s.subtitles).then((x) => x.text())); } catch { cues = []; }
+      ra.innerHTML = "";
+      let para = null, ch = 0, prevEnd = -1;
+      cues.forEach((c, i) => {
+        while (ch < chapters.length && chapters[ch].start <= c.start + 0.3) {
+          if (ch > 0 || chapters.length === 1 || chapters[ch].start > 1) {
+            const h = document.createElement("h4"); h.textContent = chapters[ch].title; ra.appendChild(h); para = null;
+          }
+          ch++;
+        }
+        if (!para || c.start - prevEnd > 0.7) { para = document.createElement("p"); ra.appendChild(para); }
+        const w = document.createElement("span"); w.className = "cue"; w.textContent = c.text + " "; w.dataset.i = i;
+        para.appendChild(w); cueEls.push(w); prevEnd = c.end;
+      });
+      if (!cues.length) ra.textContent = "The words for this one aren't available.";
+    }
+    ra.hidden = false; raBtn.textContent = "Hide words"; raBtn.setAttribute("aria-expanded", "true");
+    follow(true);
+  };
+  raBtn.addEventListener("click", () => {
+    if (ra.hidden) showReadAlong();
+    else { ra.hidden = true; raBtn.textContent = "Read along"; raBtn.setAttribute("aria-expanded", "false"); }
+    saveReaderPrefs({ ...readerPrefs(), readAlong: !ra.hidden });
+  });
+  ra.addEventListener("click", (e) => {
+    const w = e.target.closest(".cue"); if (!w) return;
+    m.currentTime = cues[+w.dataset.i].start + 0.02; if (m.paused) m.play().catch(() => {});
+  });
+  let userScrolled = 0;
+  ra.addEventListener("wheel", () => { userScrolled = Date.now(); }, { passive: true });
+  ra.addEventListener("touchmove", () => { userScrolled = Date.now(); }, { passive: true });
+  const follow = (force) => {
+    if (ra.hidden || !cues.length) return;
+    const t = m.currentTime;
+    let i = current;
+    if (i < 0 || !(cues[i].start <= t && (cues[i + 1] ? cues[i + 1].start > t : true))) {
+      i = cues.findIndex((c, k) => c.start <= t && (!cues[k + 1] || cues[k + 1].start > t));
+    }
+    if (i === current && !force) return;
+    if (cueEls[current]) cueEls[current].classList.remove("now");
+    current = i;
+    const el = cueEls[i]; if (!el) return;
+    el.classList.add("now");
+    if (force || Date.now() - userScrolled > 4000) {           // keep the line in view (inside the box, not the page)
+      const top = el.offsetTop - ra.offsetTop - ra.clientHeight / 3;
+      ra.scrollTo({ top: Math.max(0, top), behavior: force ? "auto" : "smooth" });
+    }
+  };
+
+  // where we are: chapter name and picking up later
+  const where = document.createElement("p"); where.className = "listen-where";
+  const chapterNow = () => {
+    if (!chapters.length) return;
+    let k = 0; for (let j = 0; j < chapters.length; j++) if (chapters[j].start <= m.currentTime + 0.3) k = j;
+    if (chSel.value !== String(k)) chSel.value = String(k);
+  };
+  let lastSave = 0;
+  const save = (keep) => {
+    if (!m.duration || !isFinite(m.duration)) return;
+    lastSave = Date.now();
+    const pos = m.ended ? m.duration : m.currentTime;
+    fetch(`/api/stories/${encodeURIComponent(id)}/position`, { method: "PUT", keepalive: !!keep,
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pos, dur: m.duration }) }).catch(() => {});
+  };
+  m.addEventListener("timeupdate", () => {
+    follow(false); chapterNow();
+    if (!m.paused && Date.now() - lastSave > 15000) save();
+  });
+  m.addEventListener("seeked", () => { follow(true); chapterNow(); });
+  m.addEventListener("pause", () => save());
+  m.addEventListener("ended", () => save());
+  window.addEventListener("pagehide", () => { if (!m.paused) save(true); });
+
+  const pickUp = async () => {
+    const p = await fetch(`/api/stories/${encodeURIComponent(id)}/position`).then((x) => x.json()).catch(() => ({}));
+    const dur = m.duration || p.dur || 0;
+    if (p.pos > 15 && (!dur || p.pos < dur - 20) && m.currentTime < 1) {
+      m.currentTime = p.pos;
+      where.innerHTML = "";
+      const t = document.createElement("span"); t.textContent = `Picking up where you stopped, at ${clock(p.pos)}. `;
+      const again = document.createElement("button"); again.type = "button"; again.className = "linkish"; again.textContent = "Start from the beginning";
+      again.addEventListener("click", () => { m.currentTime = 0; where.textContent = ""; });
+      where.append(t, again);
+    }
+  };
+  if (m.readyState >= 1) pickUp(); else m.addEventListener("loadedmetadata", pickUp, { once: true });
+
+  fetch(`/api/stories/${encodeURIComponent(id)}/chapters`).then((x) => x.json()).then((r) => {
+    chapters = (r.chapters || []).filter((c) => c.title);
+    if (chapters.length > 1) {
+      chSel.innerHTML = "";
+      chapters.forEach((c, k) => { const o = document.createElement("option"); o.value = String(k); o.textContent = c.title; chSel.appendChild(o); });
+      chField.hidden = false; chapterNow();
+    }
+    if (readerPrefs().readAlong && s.subtitles) showReadAlong();
+  }).catch(() => {});
+
+  bar.append(chField, field("Speed", speed), field("Sleep", sleep), sleepLeft, raBtn);
+  const off = offlineButton(s);
+  if (off) bar.appendChild(off);
+  box.append(bar, where, ra);
+  return box;
+}
+
+// ── saving a story on this phone or tablet to play with no connection ──
+const OFFLINE_CACHE = "storymaker-offline-v1";
+const offlineOk = () => "caches" in window && "serviceWorker" in navigator && window.isSecureContext;
+const playable = (s) => s.video_url || s.video || s.audio_url || s.audio;
+function offlineFiles(s) {
+  const files = [playable(s), s.subtitles, s.thumb, `/api/stories/${encodeURIComponent(s.id)}/chapters`].filter(Boolean);
+  return files;
+}
+async function isSavedOffline(s) {
+  if (!offlineOk()) return false;
+  try { const c = await caches.open(OFFLINE_CACHE); return !!(await c.match(playable(s))); } catch { return false; }
+}
+function offlineButton(s) {
+  if (!playable(s)) return null;
+  const b = document.createElement("button"); b.type = "button"; b.className = "quiet offline-btn";
+  if (!offlineOk()) {
+    b.textContent = "Save for offline";
+    b.addEventListener("click", () => {
+      b.replaceWith(Object.assign(document.createElement("span"), { className: "sleep-left",
+        textContent: "Saving for offline needs the secure (https) address, like your Tailscale .ts.net one." }));
+    });
+    return b;
+  }
+  const label = async () => { b.textContent = (await isSavedOffline(s)) ? "Saved on this device ✓ (remove)" : "Save for offline"; };
+  label();
+  b.addEventListener("click", async () => {
+    const c = await caches.open(OFFLINE_CACHE);
+    if (await isSavedOffline(s)) {
+      for (const f of offlineFiles(s)) await c.delete(f);
+      return label();
+    }
+    b.disabled = true; b.textContent = "Saving…";
+    try {
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      for (const f of offlineFiles(s)) {
+        const r = await fetch(f, { credentials: "same-origin" });
+        if (!r.ok) throw new Error(`${r.status}`);
+        await c.put(f, r);
+      }
+      await label();
+    } catch (e) {
+      for (const f of offlineFiles(s)) await c.delete(f);
+      b.textContent = "Couldn't save it (the device may be out of space). Try again";
+    } finally { b.disabled = false; }
+  });
+  return b;
 }
 
 // ── reading view: chapters, paragraphs, adjustable size, paper or night ──
@@ -1383,9 +1613,95 @@ async function loadLibrary() {
     const what = s.video ? "Video" : s.audio ? "Audio" : "Story";
     sm.textContent = `${what}${s.episode > 1 ? `, episode ${s.episode}` : ""}${s.level ? `, ${LEVEL_NAMES[s.level] || s.level}` : ""}${s.by ? `, by ${s.by}` : ""}`;
     meta.append(t, sm); b.appendChild(meta);
+    if (s.bedtime) { const bt = document.createElement("span"); bt.className = "badge bedtime-badge"; bt.textContent = "Bedtime"; b.appendChild(bt); }
+    if (s.listened > 0.02 && s.listened < 0.97) {        // how far you got
+      const pr = document.createElement("div"); pr.className = "listened"; pr.title = `${Math.round(s.listened * 100)}% listened`;
+      const f = document.createElement("span"); f.style.width = `${Math.round(s.listened * 100)}%`; pr.appendChild(f); b.appendChild(pr);
+    }
+    isSavedOffline(s).then((yes) => {
+      if (yes) { const o = document.createElement("span"); o.className = "badge saved-badge"; o.textContent = "On this device"; b.appendChild(o); }
+      else if (!navigator.onLine) b.classList.add("unavailable");
+    });
     b.addEventListener("click", () => { storyCard(s, $("viewerBody")); $("viewer").showModal(); });
     shelf.appendChild(b);
   }
+  $("offlineNote").hidden = navigator.onLine;
+}
+window.addEventListener("online", () => loadLibrary());
+window.addEventListener("offline", () => loadLibrary());
+
+// ── bedtime: a calm, short story by default ──
+$("bedtime").addEventListener("change", () => {
+  if (!$("bedtime").checked) return;
+  if (parseInt($("chapters").value, 10) > 1) $("chapters").value = "1";
+  if (parseInt($("scenes").value, 10) > 5) { $("scenes").value = "5"; $("scenes").dispatchEvent(new Event("input")); }
+  const epic = document.querySelector('input[name="detail"][value="epic"]');
+  if (epic && epic.checked) document.querySelector('input[name="detail"][value="standard"]').checked = true;
+  const calm = document.querySelector('input[name="pictureStyle"][value="epic"]');
+  if (calm && calm.checked) { const sb = document.querySelector('input[name="pictureStyle"][value="storybook"]'); if (sb) sb.checked = true; }
+});
+
+// ── your private podcast feed ──
+async function feedPanel() {
+  const p = $("feedPanel");
+  const btnEl = $("feedBtn");
+  if (!p.hidden) { p.hidden = true; btnEl.setAttribute("aria-expanded", "false"); return; }
+  p.hidden = false; btnEl.setAttribute("aria-expanded", "true");
+  p.innerHTML = "<p class=\"hint\">Loading…</p>";
+  const draw = (r) => {
+    p.innerHTML = "";
+    const h = document.createElement("h3"); h.textContent = "Your podcast feed";
+    const hint = document.createElement("p"); hint.className = "hint";
+    hint.textContent = "Every story with audio shows up as an episode in a podcast app, newest first, with its chapters and cover. The address is private to you: anyone who has it can listen, so don't share it.";
+    p.append(h, hint);
+    if (!r.url) {
+      const make = document.createElement("button"); make.type = "button"; make.className = "go go-small"; make.textContent = "Make my feed address";
+      make.addEventListener("click", async () => draw(await api("/api/feed?make=1", null, "GET")));
+      p.appendChild(make); return;
+    }
+    const row = document.createElement("div"); row.className = "feed-row";
+    const inp = document.createElement("input"); inp.type = "text"; inp.readOnly = true; inp.value = r.url; inp.setAttribute("aria-label", "Feed address");
+    inp.addEventListener("focus", () => inp.select());
+    const copy = document.createElement("button"); copy.type = "button"; copy.className = "small-btn"; copy.textContent = "Copy";
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(r.url); copy.textContent = "Copied"; } catch { inp.select(); copy.textContent = "Press Copy on your keyboard"; }
+      setTimeout(() => { copy.textContent = "Copy"; }, 2500);
+    });
+    row.append(inp, copy); p.appendChild(row);
+    const how = document.createElement("ul"); how.className = "hint feed-how";
+    for (const t of [
+      "iPhone or iPad: open Podcasts, then Library, then the ⋯ button, and choose Follow a Show by URL. Paste the address.",
+      "Try Apple Podcasts first. Many other apps (Overcast and Pocket Casts among them) fetch feeds from their own servers, which can't reach a private address like this one.",
+      "Your phone has to be able to reach StoryMaker (on Tailscale, or at home) to download new episodes.",
+    ]) { const li = document.createElement("li"); li.textContent = t; how.appendChild(li); }
+    p.appendChild(how);
+    if (!r.https) {
+      const w = document.createElement("p"); w.className = "note";
+      w.textContent = "This address starts with http. Some podcast apps only accept https: open StoryMaker at its secure address (your Tailscale .ts.net name) and the feed address will use it.";
+      p.appendChild(w);
+    }
+    const tools = document.createElement("div"); tools.className = "feed-row";
+    if (r.canExplicit) {
+      const l = document.createElement("label"); l.className = "check";
+      const c = document.createElement("input"); c.type = "checkbox"; c.checked = !!r.explicit;
+      c.addEventListener("change", async () => draw({ ...r, ...(await api("/api/feed", { explicit: c.checked })) }));
+      l.append(c, " Include Explicit stories"); tools.appendChild(l);
+    }
+    const reset = document.createElement("button"); reset.type = "button"; reset.className = "small-btn"; reset.textContent = "New address";
+    reset.title = "The old address stops working. Use this if it got out.";
+    reset.addEventListener("click", () => {
+      confirmStart(tools, reset, "Make a new address?", ["The old address stops working straight away.", "You'll need to add the new one to your podcast app again."], "Make a new address",
+        async () => draw({ ...r, ...(await api("/api/feed", { reset: true })) }));
+    });
+    tools.appendChild(reset); p.appendChild(tools);
+  };
+  draw(await api("/api/feed", null, "GET"));
+}
+$("feedBtn").addEventListener("click", feedPanel);
+
+// ── works as an app on the phone's home screen, and plays saved stories with no connection ──
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(() => {});
 }
 
 // "Next episode" on a story: the make form, set to continue its series

@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>StoryMaker</title>
+<meta name="theme-color" content="#1f2440">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Stories">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -196,6 +203,7 @@
           </select>
         </div>
         <label class="check"><input type="checkbox" id="proofread" checked> Proofread every scene (cleaner sentences and clear dialogue; takes a little longer)</label>
+        <label class="check"><input type="checkbox" id="bedtime"> Bedtime story: calm, no scares, soft sounds, a slower narrator, and a sleep timer when it plays</label>
         <label class="check"><input type="checkbox" id="useStyle" checked> Use my style (set it with the Style button at the top)</label>
         <label class="check"><input type="checkbox" id="portrait"> Phone-shaped video (9:16)</label>
         <label class="check"><input type="checkbox" id="book"> Picture book for story or audio (draws pictures)</label>
@@ -263,16 +271,19 @@
       <div class="library-tools">
         <button type="button" class="small-btn" id="cleanupAllBtn">Clean up the writing</button>
         <button type="button" class="small-btn" id="nasBtn">Move to NAS</button>
+        <button type="button" class="small-btn" id="feedBtn" aria-expanded="false" aria-controls="feedPanel">Podcast feed</button>
         <select id="filter" aria-label="Show stories from"><option value="">All stories</option></select>
       </div>
     </div>
     <div class="cleanup-all" id="cleanupAll" hidden></div>
     <div class="cleanup-all nas-panel" id="nasPanel" hidden></div>
+    <div class="cleanup-all feed-panel" id="feedPanel" hidden></div>
     <div class="unfinished" id="unfinished" hidden>
       <h3>Unfinished</h3>
       <p class="hint">Stories that stopped before the end. What's already written is kept. <strong>Recover</strong> finishes it from where it stopped. Stories cut off by a restart carry on by themselves.</p>
       <div id="unfinishedList"></div>
     </div>
+    <p class="note offline-note" id="offlineNote" hidden>You're offline. Stories saved on this device play; the others will be back when you reconnect.</p>
     <div class="shelf" id="shelf"></div>
     <p class="empty" id="shelfEmpty" hidden>No stories yet. Make your first one above.</p>
     <div class="nas-shelf" id="nasShelf" role="tabpanel" aria-labelledby="tabArchive" hidden>

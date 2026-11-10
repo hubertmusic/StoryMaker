@@ -62,6 +62,13 @@ db.exec(`
 `);
 try { db.exec("ALTER TABLE jobs ADD COLUMN info TEXT"); } catch { /* already there */ }
 db.exec("CREATE TABLE IF NOT EXISTS styles (user_id INTEGER PRIMARY KEY, data TEXT NOT NULL DEFAULT '{}')");
+// Where each person stopped listening (so a story picks up there on any device), and their private podcast feed.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS positions (user_id INTEGER NOT NULL, story_id TEXT NOT NULL, pos REAL NOT NULL,
+    dur REAL NOT NULL DEFAULT 0, updated INTEGER NOT NULL, PRIMARY KEY (user_id, story_id));
+  CREATE TABLE IF NOT EXISTS feeds (user_id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE,
+    explicit INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL DEFAULT (datetime('now')));
+`);
 const CUT_OFF = [];   // stories a restart cut off: they're picked up again by themselves once StoryMaker is ready
 // StoryMaker just started, so nothing is being made yet: work that was cut off by a restart or an update shows
 // as stopped (and Make it again carries on from where it was), not as running forever.
@@ -181,8 +188,92 @@ app.post("/api/logout", (req, res) => {
   res.set("Set-Cookie", "sm_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0").json({ ok: true });
 });
 
+// ───────────────────────────── private podcast feed ─────────────────────────────
+// A secret address per person: podcast apps can't sign in, so the long random token in the address is the key.
+// It's checked on the feed and on every file it points to; "New address" makes the old one stop working.
+function feedUser(token) {
+  if (!/^[a-f0-9]{48}$/.test(token || "")) return null;
+  const f = db.prepare("SELECT * FROM feeds WHERE token = ?").get(token);
+  const u = f && db.prepare("SELECT * FROM users WHERE id = ?").get(f.user_id);
+  return u ? { user: u, feed: f } : null;
+}
+function feedFile(id) {        // what a podcast app plays: the MP3 (with chapters), else the video
+  for (const [name, type] of [["story.mp3", "audio/mpeg"], ["story.m4a", "audio/mp4"], ["story.mp4", "video/mp4"]]) {
+    const f = path.join(OUTPUT_DIR, id, name);
+    if (fs.existsSync(f)) return { file: f, name, type, size: fs.statSync(f).size };
+  }
+  return null;
+}
+function publicBase(req) {
+  const set = process.env.PUBLIC_URL || envFileValue("PUBLIC_URL");
+  if (set) return set.replace(/\/+$/, "");
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol).split(",")[0].trim();
+  return `${proto}://${req.headers["x-forwarded-host"] || req.get("host")}`;
+}
+const xml = (t) => String(t == null ? "" : t).replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c]));
+function idDate(id) {
+  const m = String(id).match(/^(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : new Date();
+}
+app.get("/feed/:token.xml", (req, res) => {
+  const fu = feedUser(req.params.token);
+  if (!fu) return res.sendStatus(404);
+  const base = `${publicBase(req)}/feed/${fu.feed.token}`;
+  const items = [];
+  for (const id of syncStories()) {
+    if (!canSee(fu.user, id)) continue;
+    const r = readResult(id) || {};
+    if (r.level === "explicit" && !fu.feed.explicit) continue;
+    const media = feedFile(id);
+    if (!media) continue;
+    const eid = encodeURIComponent(id);
+    const ext = path.extname(media.name);
+    const thumb = fs.existsSync(path.join(OUTPUT_DIR, id, "thumb.jpg")) ? `${base}/${eid}/thumb.jpg` : "";
+    const sub = r.series && r.episode ? `${r.series}, episode ${r.episode}. ` : "";
+    items.push({ id, at: idDate(id), xml: `    <item>
+      <title>${xml(r.title || id)}</title>
+      <description>${xml(sub + (r.logline || ""))}</description>
+      <itunes:summary>${xml(sub + (r.logline || ""))}</itunes:summary>
+      <guid isPermaLink="false">${xml(id)}</guid>
+      <pubDate>${idDate(id).toUTCString()}</pubDate>
+      <enclosure url="${xml(`${base}/${eid}/play${ext}`)}" length="${media.size}" type="${media.type}"/>
+${thumb ? `      <itunes:image href="${xml(thumb)}"/>\n` : ""}${r.series && r.episode ? `      <itunes:episode>${parseInt(r.episode, 10) || 1}</itunes:episode>\n` : ""}      <itunes:explicit>${["mature", "explicit"].includes(r.level) ? "true" : "false"}</itunes:explicit>
+    </item>` });
+  }
+  items.sort((a, b) => b.at - a.at);
+  const cover = items.length && fs.existsSync(path.join(OUTPUT_DIR, items[0].id, "thumb.jpg")) ? `${base}/${encodeURIComponent(items[0].id)}/thumb.jpg` : "";
+  res.type("application/rss+xml").set("Cache-Control", "no-cache").send(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>${xml(`StoryMaker (${fu.user.username})`)}</title>
+    <description>Your stories from StoryMaker, private to you.</description>
+    <link>${xml(publicBase(req))}</link>
+    <language>en</language>
+    <itunes:author>StoryMaker</itunes:author>
+    <itunes:block>Yes</itunes:block>
+    <itunes:explicit>false</itunes:explicit>
+${cover ? `    <itunes:image href="${xml(cover)}"/>\n    <image><url>${xml(cover)}</url><title>StoryMaker</title><link>${xml(publicBase(req))}</link></image>\n` : ""}${items.map((i) => i.xml).join("\n")}
+  </channel>
+</rss>
+`);
+});
+app.get("/feed/:token/:id/:file", (req, res) => {
+  const fu = feedUser(req.params.token);
+  const id = req.params.id;
+  if (!fu || id.startsWith(".") || id.includes("/") || !canSee(fu.user, id)) return res.sendStatus(404);
+  const r = readResult(id) || {};
+  if (r.level === "explicit" && !fu.feed.explicit) return res.sendStatus(404);
+  if (req.params.file === "thumb.jpg") {
+    const t = path.join(OUTPUT_DIR, id, "thumb.jpg");
+    return fs.existsSync(t) ? res.sendFile(t) : res.sendStatus(404);
+  }
+  const media = /^play\.(mp3|m4a|mp4)$/.test(req.params.file) && feedFile(id);
+  if (!media) return res.sendStatus(404);
+  res.sendFile(media.file, { headers: { "Content-Type": media.type } });   // supports skipping (Range)
+});
+
 // The sign-in page and what it needs are open; everything else needs a signed-in person.
-const OPEN = /^\/(login\.html|login\.js|style\.css|fonts\/[\w.-]+)$/;
+const OPEN = /^\/(login\.html|login\.js|style\.css|fonts\/[\w.-]+|manifest\.webmanifest|icon-\d+\.png|apple-touch-icon\.png)$/;
 app.use((req, res, next) => {
   if (OPEN.test(req.path)) return next();
   req.user = currentUser(req);
@@ -248,6 +339,7 @@ function buildArgs(b) {
   const writer = pick(b.writer || "", WRITERS, "");
   if (writer) args.push("--provider", writer);
   if (b.portrait) args.push("--portrait");
+  if (b.bedtime) args.push("--bedtime");
   if (PICTURE_STYLES.includes(b.pictureStyle)) args.push("--picture-style", b.pictureStyle);
   if (b.useStyle === false) args.push("--no-style");
   if (b.proofread === false) args.push("--no-proofread");
@@ -839,6 +931,78 @@ app.get("/api/stories/:id/audio/:kind", (req, res) => {
   res.download(f, `${niceName(id)}.${req.params.kind}`);
 });
 
+// The read-along player: chapter times (saved when the audiobook is made; read from the audiobook for older stories).
+const chapterCache = new Map();
+function probeChapters(file) {
+  return new Promise((resolve) => {
+    let out = "";
+    const p = spawn("ffprobe", ["-v", "error", "-print_format", "json", "-show_chapters", file]);
+    p.stdout.on("data", (d) => { out += d; });
+    p.on("error", () => resolve([]));
+    p.on("close", () => {
+      try {
+        resolve((JSON.parse(out).chapters || []).map((c) => ({ start: Math.round(parseFloat(c.start_time) * 100) / 100,
+          title: (c.tags && c.tags.title) || "" })));
+      } catch { resolve([]); }
+    });
+  });
+}
+app.get("/api/stories/:id/chapters", async (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const dir = path.join(OUTPUT_DIR, id);
+  try { return res.json({ ok: true, chapters: JSON.parse(fs.readFileSync(path.join(dir, "chapters.json"), "utf8")) }); } catch {}
+  for (const name of ["story.m4b", "story.mp3"]) {
+    const f = path.join(dir, name);
+    if (!fs.existsSync(f)) continue;
+    const key = `${f}:${fs.statSync(f).mtimeMs}`;
+    if (!chapterCache.has(key)) chapterCache.set(key, await probeChapters(f));
+    const ch = chapterCache.get(key);
+    if (ch.length) {
+      try { fs.writeFileSync(path.join(dir, "chapters.json"), JSON.stringify(ch, null, 1)); } catch { /* read-only: fine */ }
+      return res.json({ ok: true, chapters: ch });
+    }
+  }
+  res.json({ ok: true, chapters: [] });
+});
+
+// Where you stopped listening, kept per person so it picks up there on your phone, Mac or iPad.
+app.get("/api/stories/:id/position", (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const p = db.prepare("SELECT pos, dur, updated FROM positions WHERE user_id = ? AND story_id = ?").get(req.user.id, id);
+  res.json({ ok: true, pos: p ? p.pos : 0, dur: p ? p.dur : 0, updated: p ? p.updated : 0 });
+});
+app.put("/api/stories/:id/position", (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const pos = Math.max(0, Number((req.body || {}).pos) || 0);
+  const dur = Math.max(0, Number((req.body || {}).dur) || 0);
+  db.prepare(`INSERT INTO positions (user_id, story_id, pos, dur, updated) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (user_id, story_id) DO UPDATE SET pos = excluded.pos, dur = excluded.dur, updated = excluded.updated`)
+    .run(req.user.id, id, pos, dur, Date.now());
+  res.json({ ok: true });
+});
+
+// Your podcast feed's address (made the first time you ask), a new one (the old stops working), Explicit in it or not.
+app.get("/api/feed", (req, res) => {
+  let f = db.prepare("SELECT * FROM feeds WHERE user_id = ?").get(req.user.id);
+  if (!f && req.query.make === "1") {
+    db.prepare("INSERT INTO feeds (user_id, token) VALUES (?, ?)").run(req.user.id, crypto.randomBytes(24).toString("hex"));
+    f = db.prepare("SELECT * FROM feeds WHERE user_id = ?").get(req.user.id);
+  }
+  res.json({ ok: true, url: f ? `${publicBase(req)}/feed/${f.token}.xml` : null, explicit: !!(f && f.explicit),
+    canExplicit: allowedLevels(req.user).includes("explicit"), https: publicBase(req).startsWith("https:") });
+});
+app.post("/api/feed", (req, res) => {
+  const b = req.body || {};
+  const f = db.prepare("SELECT * FROM feeds WHERE user_id = ?").get(req.user.id);
+  if (!f) return res.json({ ok: false, error: "There's no feed yet." });
+  if (b.reset) db.prepare("UPDATE feeds SET token = ? WHERE user_id = ?").run(crypto.randomBytes(24).toString("hex"), req.user.id);
+  if (typeof b.explicit === "boolean") {
+    db.prepare("UPDATE feeds SET explicit = ? WHERE user_id = ?").run(b.explicit && allowedLevels(req.user).includes("explicit") ? 1 : 0, req.user.id);
+  }
+  const n = db.prepare("SELECT * FROM feeds WHERE user_id = ?").get(req.user.id);
+  res.json({ ok: true, url: `${publicBase(req)}/feed/${n.token}.xml`, explicit: !!n.explicit });
+});
+
 app.get("/api/stories/:id/pdf", async (req, res) => {
   const id = guard(req, res); if (!id) return;
   const r = await runStorymaker(req.user, ["--export-pdf", id]);
@@ -1094,6 +1258,8 @@ app.get("/api/nas/task/:tid", async (req, res) => {
 
 app.get("/api/stories", (req, res) => {
   const names = Object.fromEntries(db.prepare("SELECT id, username FROM users").all().map((u) => [u.id, u.username]));
+  const where = Object.fromEntries(db.prepare("SELECT story_id, pos, dur FROM positions WHERE user_id = ?").all(req.user.id)
+    .map((p) => [p.story_id, p]));
   const stories = [];
   for (const id of syncStories()) {
     if (!canSee(req.user, id)) continue;
@@ -1106,7 +1272,8 @@ app.get("/api/stories", (req, res) => {
       thumb: url("thumb.jpg"), video: url("story.mp4"), audio: url("story.mp3") || url("story.m4a"),
       book: url("story-book.pdf"), subtitles: url("story.vtt"), note: r.note || null,
       audiobook: url("story.m4b"), audioOutdated: !!r.audio_outdated, credits: url("sound-credits.txt"),
-      request: r.request || null,
+      request: r.request || null, bedtime: !!(r.bedtime || (r.request && r.request.bedtime)),
+      listened: where[id] && where[id].dur ? Math.min(1, where[id].pos / where[id].dur) : 0,
       by: req.user.role === "owner" && by && by.user_id !== req.user.id ? names[by.user_id] : null,
     });
   }

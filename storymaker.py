@@ -602,6 +602,8 @@ def series_memory(series):
 
 def episode_recap(cfg, story, series=None):
     """The continuity notes for a finished episode (None if the writer couldn't make them: that's not fatal)."""
+    if cfg.get("STORY_PROVIDER", "").lower() == "demo":     # the test writer only writes stories
+        return None
     text = "\n\n".join(str(sc.get("narration", "")) for sc in story.get("scenes", []))
     if len(text) > 14000:                      # the start and (especially) the end matter most
         text = text[:4000] + "\n…\n" + text[-10000:]
@@ -1422,12 +1424,39 @@ def apply_media_style(cfg, story):
         story["user_style"] = keep
 
 
+BEDTIME_RULES = ("\nBedtime story: this is for winding down before sleep. Keep it calm, warm and safe from beginning "
+                 "to end: no frightening moments, no villains who threaten, no loud chases or fights, no cliffhanger. "
+                 "Gentle wonder and small, easy problems that are solved kindly. Let the pace slow as it goes: shorter, "
+                 "softer sentences near the end, with quiet sounds (rain, crickets, a fire, breathing, the sea). Close "
+                 "with the characters safe, cosy and settling down to rest, and a soft goodnight feeling.\n")
+
+
+def bedtime_config(cfg):
+    """Bedtime: quieter sounds and music, and the narrator reads a little slower."""
+    def scale(key, f):
+        try:
+            cfg[key] = f"{float(cfg[key]) * f:.3f}"
+        except (KeyError, ValueError):
+            pass
+    scale("MUSIC_VOLUME", 0.6)
+    scale("AMBIENCE_VOLUME", 0.75)
+    scale("EFFECTS_VOLUME", 0.45)
+    scale("CLIP_SOUND_VOLUME", 0.5)
+    try:
+        cfg["KOKORO_SPEED"] = f"{min(float(cfg['KOKORO_SPEED']), 0.95) * 0.92:.3f}"
+    except (KeyError, ValueError):
+        pass
+    cfg["_BEDTIME"] = True
+
+
 def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapters=1, job=None, detail="standard"):
     provider = cfg["STORY_PROVIDER"].lower()
     audience, rules, length = level_info(level)
     rules += style_rules(cfg.get("_PREFS"), level)
     rules += style_block(cfg.get("_STYLE"), level)
     rules += WRITING_CRAFT
+    if cfg.get("_BEDTIME"):
+        rules += BEDTIME_RULES
     if not series:
         rules += names_rule(cfg, seed=str(job) if job else None)
     length *= DETAIL.get(detail, 1.0)
@@ -5761,6 +5790,8 @@ def remaster_story(cfg, run_id, revoice=False, redesign=False, redraw=False, sty
         story["picture_style"] = picture_style({"picture_style": style})
     if level == "explicit":
         adult_config(cfg)
+    if story.get("bedtime") and not cfg.get("_BEDTIME"):
+        bedtime_config(cfg)                    # a bedtime story stays soft when its audio is made again
     mode = result.get("mode") or ("video" if result.get("video_file") else "audio")
     if mode == "story":
         mode = "audio"
@@ -5884,6 +5915,11 @@ def make_audiobook(story, audio, timeline, out_dir, series_name="", episode=1):
     for k, (st, name) in enumerate(marks):
         end = marks[k + 1][0] if k + 1 < len(marks) else total
         meta += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(st * 1000)}", f"END={int(end * 1000)}", f"title={esc(name)}"]
+    try:                                                   # for the read-along player's chapter list
+        (out_dir / "chapters.json").write_text(json.dumps(
+            [{"start": round(st, 2), "title": name} for st, name in marks], indent=1))
+    except OSError:
+        pass
     work = out_dir / ".audiobook"
     work.mkdir(exist_ok=True)
     try:
@@ -5974,6 +6010,8 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
 
     progress_start(cfg, job_id, job, args.mode,
                    bool(args.book) or (args.mode == "video" and cfg["BOOK"] == "on"))
+    if cfg.get("_BEDTIME"):
+        (job / "bedtime").touch()                 # so carrying on later keeps it a bedtime story
     story_file = job / "story.json"
     if story_file.exists():
         story = json.loads(story_file.read_text())
@@ -5987,6 +6025,8 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
             story = write_story(cfg, idea, args.genre, level, scenes, clip_mode, series, chapters, job, args.detail)
         if args.audience:
             story["audience"] = args.audience
+        if cfg.get("_BEDTIME"):
+            story["bedtime"] = True
         story["keywords"] = cfg.get("_KEYWORDS") or []
         if cfg.get("_PREFS"):
             story["prefs"] = cfg["_PREFS"]
@@ -6020,10 +6060,11 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
                "chapters": args.chapters, "detail": args.detail, "keywords": ", ".join(story.get("keywords") or []),
                "sounds": story.get("sound_wishes", ""), "narrator": (story.get("voice_choice") or {}).get("narrator", ""),
                "portrait": args.portrait, "book": args.book, "series": series["name"] if series else "",
-               "picture_style": story.get("picture_style", "storybook"),
+               "picture_style": story.get("picture_style", "storybook"), "bedtime": bool(story.get("bedtime")),
                **(story.get("prefs") or {})}
     result = {"ok": True, "job_id": job_id, "request": request, "title": story["title"], "logline": story.get("logline", ""),
-              "level": level, "story": story_markdown(story, subtitle), "folder": str(out_dir)}
+              "level": level, "story": story_markdown(story, subtitle), "folder": str(out_dir),
+              "bedtime": bool(story.get("bedtime"))}
     (out_dir / "story.md").write_text(result["story"])
     (out_dir / "story.json").write_text(json.dumps(story, indent=2))
     result["story_file"] = str(out_dir / "story.md")
@@ -6167,6 +6208,7 @@ def recover_settings(cfg, args):
             args.idea = (story.get("logline") or story.get("title") or "Continue the story.")[:2000]
         if not args.level and story.get("level") in LEVELS:
             args.level = story["level"]
+        args.bedtime = args.bedtime or bool(story.get("bedtime"))
         args._job = rid
         return
     if not rid or not (folder / "outline.json").exists():
@@ -6181,6 +6223,7 @@ def recover_settings(cfg, args):
         except ValueError:
             pass
     outline = json.loads((folder / "outline.json").read_text())
+    args.bedtime = args.bedtime or (folder / "bedtime").exists()
     chs = outline.get("chapters") or []
     args.chapters = max(1, len(chs))
     args.scenes = max([len(c.get("scenes") or []) for c in chs] + [1])
@@ -6249,6 +6292,8 @@ def main():
     ap.add_argument("--redesign", action="store_true", help="with --remaster: choose the sounds again")
     ap.add_argument("--redraw", action="store_true", help="with --remaster: draw new pictures for the video and book")
     ap.add_argument("--draw-portraits", metavar="SERIES_SLUG", help="draw a portrait for every character in a series' bible")
+    ap.add_argument("--bedtime", action="store_true",
+                    help="a calm story for winding down: no scares, soft sounds, a slower narrator")
     ap.add_argument("--picture-style", choices=sorted(PICTURE_STYLES),
                     help="how the pictures look: storybook, realistic or cinematic (default: PICTURE_STYLE setting)")
     ap.add_argument("--skip-checks", dest="skip_checks", action="store_true",
@@ -6488,6 +6533,8 @@ def main():
     prefs = {"pov": args.pov or "", "heat": args.heat or 0, "pacing": args.pacing or "", "language": args.language or "",
              "turn_ons": (args.turn_ons or "").strip()[:400], "limits": (args.limits or "").strip()[:400]}
     cfg["_PREFS"] = {k: v for k, v in prefs.items() if v}
+    if args.bedtime:
+        bedtime_config(cfg)
 
     if level == "explicit":
         # Adults only, and it never leaves this computer: the online AIs don't allow it and could
