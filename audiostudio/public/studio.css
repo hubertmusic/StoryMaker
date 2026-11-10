@@ -274,3 +274,8 @@ dialog#makeDlg { width: min(560px, calc(100vw - 32px)); }
 .lib-tabs [role="tab"]:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .shelf-head { flex-wrap: wrap; align-items: center; }
 .danger { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.rec { display: grid; gap: 8px; }
+.rec #recBtn { justify-self: start; }
+.rec-script blockquote { margin: 4px 0; padding: 10px 14px; border-left: 3px solid var(--lamp, #f0b54a);
+  background: rgba(255,255,255,.04); border-radius: 0 8px 8px 0; font-size: 17px; line-height: 1.6; }
+.rec audio { width: 100%; }

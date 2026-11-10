@@ -229,7 +229,20 @@
   <form class="upload" id="uploadForm">
     <strong>Add your own voice</strong>
     <span class="hint">10–30 seconds of one person reading clearly, no music. Only use a voice you have the right to use (your own, or someone who said yes).</span>
-    <input type="file" id="clipFile" accept=".wav,.mp3,.m4a,.flac" required>
+    <div class="rec" id="rec">
+      <button class="small-btn" type="button" id="recBtn">Record my voice here</button>
+      <span class="hint" id="recState"></span>
+      <div class="rec-script" id="recScript" hidden>
+        <p class="hint">Read this out loud in your storytelling voice, at an easy pace, somewhere quiet. Stop after 20–30 seconds.</p>
+        <blockquote>Once upon a time, at the edge of a sleepy town, there lived a girl who was never quite ready for bed.
+          “Just one more story,” she would say, and her grandfather would smile and open the old book again.
+          Outside, the wind whispered through the trees, the stars came out one by one, and somewhere far away
+          a dragon yawned. “Now,” said Grandpa, lowering his voice, “where were we?”</blockquote>
+      </div>
+      <audio id="recPreview" controls hidden></audio>
+    </div>
+    <span class="hint">Or choose a recording:</span>
+    <input type="file" id="clipFile" accept=".wav,.mp3,.m4a,.flac">
     <div class="row2" style="margin-top:0">
       <input type="text" id="clipName" placeholder="Name, e.g. Grandpa Joe" maxlength="40" required>
       <select id="clipGender"><option value="female">Woman</option><option value="male">Man</option></select>

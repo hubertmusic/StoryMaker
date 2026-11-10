@@ -183,6 +183,16 @@
             </select>
           </div>
           <div class="field">
+            <label for="bigMoments">Animate the big moments</label>
+            <select id="bigMoments" aria-describedby="bigMomentsHint">
+              <option value="0">No, pictures only</option>
+              <option value="1">The biggest moment</option>
+              <option value="2">2 big moments</option>
+              <option value="3">3 big moments</option>
+            </select>
+            <small class="opt" id="bigMomentsHint">Picture videos only. The fights and turning points become short moving clips (Veo, paid: the price check shows the cost).</small>
+          </div>
+          <div class="field">
             <label for="writer">Writer</label>
             <select id="writer">
               <option value="">From settings</option>
@@ -204,6 +214,7 @@
           </select>
         </div>
         <label class="check"><input type="checkbox" id="proofread" checked> Proofread every scene (cleaner sentences and clear dialogue; takes a little longer)</label>
+        <label class="check"><input type="checkbox" id="adventure"> Choose your own adventure: the listener picks what happens at each turning point (read aloud, no video)</label>
         <label class="check"><input type="checkbox" id="bedtime"> Bedtime story: calm, no scares, soft sounds, a slower narrator, and a sleep timer when it plays</label>
         <label class="check"><input type="checkbox" id="useStyle" checked> Use my style (set it with the Style button at the top)</label>
         <label class="check"><input type="checkbox" id="portrait"> Phone-shaped video (9:16)</label>

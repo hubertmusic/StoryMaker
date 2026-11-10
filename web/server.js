@@ -352,6 +352,15 @@ function buildArgs(b) {
   if (writer) args.push("--provider", writer);
   if (b.portrait) args.push("--portrait");
   if (b.bedtime) args.push("--bedtime");
+  const bm = parseInt(b.bigMoments, 10);
+  if (bm >= 1 && bm <= 5 && !b.adventure) args.push("--big-moments", String(bm));
+  if (b.adventure) {                     // a choose-your-own-adventure: read aloud, but no video
+    args.push("--adventure");
+    const i = args.indexOf("--mode");
+    if (i >= 0 && args[i + 1] === "video") args[i + 1] = "audio";
+    const si = args.indexOf("--series");
+    if (si >= 0) args.splice(si, 2);
+  }
   if (PICTURE_STYLES.includes(b.pictureStyle)) args.push("--picture-style", b.pictureStyle);
   if (b.useStyle === false) args.push("--no-style");
   if (b.proofread === false) args.push("--no-proofread");
@@ -1208,6 +1217,38 @@ app.post("/api/feed", (req, res) => {
   res.json({ ok: true, url: `${publicBase(req)}/feed/${n.token}.xml`, explicit: !!n.explicit });
 });
 
+// E-book, print-ready picture book, and the chapter list YouTube wants in a video's description.
+app.get("/api/stories/:id/epub", async (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const r = await runStorymaker(req.user, ["--export-epub", id]);
+  if (!r.ok || !r.epub) return res.status(404).send(r.error || "Couldn't make the e-book");
+  res.download(r.epub, `${niceName(id)}.epub`);
+});
+app.get("/api/stories/:id/print", async (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const r = await runStorymaker(req.user, ["--export-print", id]);
+  if (!r.ok || !r.pdf) return res.status(404).send(r.error || "Couldn't make the print book");
+  const cover = req.query.cover === "1";
+  res.download(cover ? r.cover : r.pdf, `${niceName(id)} (print${cover ? " cover" : ""}).pdf`);
+});
+app.get("/api/stories/:id/youtube", (req, res) => {
+  const id = guard(req, res); if (!id) return;
+  const r = readResult(id) || {};
+  let ch = [];
+  try { ch = JSON.parse(fs.readFileSync(path.join(OUTPUT_DIR, id, "chapters.json"), "utf8")); } catch { /* none */ }
+  const stamp = (t) => { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s2 = String(t % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${s2}` : `${m}:${s2}`; };
+  // YouTube's rules: the first at 0:00, at least three, each at least ten seconds long
+  const marks = [];
+  for (const c of ch) if (!marks.length || c.start - marks[marks.length - 1].start >= 10) marks.push(c);
+  if (marks.length) marks[0] = { ...marks[0], start: 0 };
+  const lines = marks.length >= 3 ? marks.map((c) => `${stamp(c.start)} ${c.title}`) : [];
+  const desc = [r.logline || "", r.series && r.episode > 1 ? `${r.series}, episode ${r.episode}.` : ""].filter(Boolean).join("\n\n");
+  const text = [desc, lines.length ? `Chapters\n${lines.join("\n")}` : "", "Made with StoryMaker."].filter(Boolean).join("\n\n");
+  res.json({ ok: true, title: (r.title || "").slice(0, 100), text, chapters: lines.length,
+    note: lines.length ? "" : "This one is too short for YouTube chapters (it needs at least three, ten seconds apart)." });
+});
+
 app.get("/api/stories/:id/pdf", async (req, res) => {
   const id = guard(req, res); if (!id) return;
   const r = await runStorymaker(req.user, ["--export-pdf", id]);
@@ -1478,6 +1519,7 @@ app.get("/api/stories", (req, res) => {
       book: url("story-book.pdf"), subtitles: url("story.vtt"), note: r.note || null,
       audiobook: url("story.m4b"), audioOutdated: !!r.audio_outdated, credits: url("sound-credits.txt"),
       request: r.request || null, bedtime: !!(r.bedtime || (r.request && r.request.bedtime)),
+      adventure: r.adventure ? url("adventure.json") : null, pictures: !!url("scene_01.png"),
       listened: where[id] && where[id].dur ? Math.min(1, where[id].pos / where[id].dur) : 0,
       by: req.user.role === "owner" && by && by.user_id !== req.user.id ? names[by.user_id] : null,
     });

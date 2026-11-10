@@ -185,6 +185,7 @@ DEFAULTS = {
     # Approximate prices used for --estimate (US dollars). Edit to match your bills.
     "PRICE_OMNI_PER_SEC": "0.10",
     "PRICE_VEO_PER_SEC": "0.40",
+    "BIG_MOMENTS": "0",                      # a picture video's most dramatic scenes animated with Veo (0 = none)
     "PRICE_IMAGE": "0.05",
     "PRICE_STORY_CLAUDE": "0.06",
     "PRICE_STORY_GEMINI": "0.03",
@@ -3152,13 +3153,19 @@ def omni_clip(cfg, prompt, portrait, out_path, ref=None):
     out_path.write_bytes(dl.content)
 
 
-def veo_clip(cfg, prompt, portrait, out_path, ref=None):
-    """Veo 3.1 (long-running operation). Tries with the character sheet, then without."""
+def veo_clip(cfg, prompt, portrait, out_path, ref=None, first_frame=None):
+    """Veo 3.1 (long-running operation). Tries with the character sheet, then without. With first_frame (a big
+    moment), the clip starts from that scene's own picture, so it moves on from what you've just seen."""
     key = need(cfg, "GEMINI_API_KEY")
     hdr = {"x-goog-api-key": key, "content-type": "application/json"}
     params = {"aspectRatio": "9:16" if portrait else "16:9", "resolution": cfg["VIDEO_RESOLUTION"],
               "durationSeconds": 8}
     attempts = []
+    if first_frame is not None and Path(first_frame).exists():
+        mime = "image/jpeg" if Path(first_frame).suffix.lower() in (".jpg", ".jpeg") else "image/png"
+        attempts.append({"instances": [{"prompt": prompt, "image": {"bytesBase64Encoded": b64file(first_frame),
+                                                                    "mimeType": mime}}],
+                         "parameters": dict(params, personGeneration="allow_adult")})
     if ref is not None:
         attempts.append({"instances": [{"prompt": prompt, "referenceImages": [
             {"image": {"bytesBase64Encoded": b64file(ref), "mimeType": "image/png"}, "referenceType": "asset"}]}],
@@ -3171,7 +3178,7 @@ def veo_clip(cfg, prompt, portrait, out_path, ref=None):
         if r.status_code == 200:
             break
         if r.status_code == 400 and i < len(attempts) - 1:
-            log("Veo didn't accept the character sheet for this clip; retrying without it.")
+            log("Veo didn't accept the picture for this clip; trying another way.")
             continue
         raise RuntimeError(f"Veo error {r.status_code}: {r.text[:300]}")
     op = r.json()["name"]
@@ -4766,6 +4773,95 @@ def clip_segment(cfg, clip, cap, wav, seg, w, h):
          "-filter_complex", vid + aud, "-map", "[v]", "-map", "[a]", "-t", f"{secs:.2f}", *ENC, str(seg)])
 
 
+def big_moments(story, n):
+    """The scenes most worth animating: the fights, chases and shouts, weighted towards the climax."""
+    scenes = story["scenes"]
+    if n <= 0 or not scenes:
+        return []
+    last = max(1, len(scenes) - 1)
+    def score(i):
+        sc = scenes[i]
+        text = " ".join([str(sc.get("narration", ""))] + [str(l.get("text", "")) for l in sc.get("lines") or []
+                                                          if isinstance(l, dict)])
+        return (10 if sc.get("big_moment") else 0) + 2 * len(CONFLICT.findall(text)) + min(4, text.count("!")) \
+            + 3 * (i / last) + (1 if i == len(scenes) - 1 else 0)
+    ranked = sorted(range(len(scenes)), key=score, reverse=True)
+    picked = []
+    for i in ranked:                                   # spread them out: not two in a row if it can be helped
+        if len(picked) >= n:
+            break
+        if all(abs(i - j) > 1 for j in picked) or len(ranked) <= 2 * n:
+            picked.append(i)
+    for i in ranked:
+        if len(picked) >= n:
+            break
+        if i not in picked:
+            picked.append(i)
+    return sorted(picked)
+
+
+def moment_clips(cfg, story, job, pics, portrait, ref, reuse_only=False):
+    """BIG_MOMENTS: a few scenes become short animated clips (Veo, online and paid), starting from their own
+    picture. The rest of the story stays as pictures. Explicit stories never leave this computer, so not those."""
+    try:
+        want = max(0, min(5, int(cfg.get("BIG_MOMENTS") or 0)))
+    except ValueError:
+        want = 0
+    if reuse_only:                             # remaking: the moments this story was made with
+        want = int(story.get("big_moments") or 0)
+    elif want:
+        story["big_moments"] = want
+    if not want or story.get("level") == "explicit":
+        return {}
+    picked = big_moments(story, want)
+    out = {}
+    for n_, i in enumerate(picked, 1):
+        f = job / f"moment_{i + 1:02d}.mp4"
+        if valid_media(f):
+            out[i] = f
+            continue
+        if reuse_only or not cfg.get("GEMINI_API_KEY"):
+            continue
+        tmp = job / f"moment_{i + 1:02d}.part.mp4"
+        report("video", 0.78, f"Animating big moment {n_} of {len(picked)} (a few minutes each)", image=pics[i])
+        try:
+            prompt = shot_prompt(story, story["scenes"][i], "video") + \
+                " Dynamic, cinematic motion: this is the most dramatic moment of the scene."
+            veo_clip(cfg, prompt, portrait, tmp, ref, first_frame=pics[i])
+            if not valid_media(tmp):
+                raise RuntimeError("the clip isn't a playable video")
+            tmp.replace(f)
+            out[i] = f
+            log(f"Big moment {n_}/{len(picked)} animated (scene {i + 1}).")
+        except Exception as e:
+            tmp.unlink(missing_ok=True)
+            log(f"Couldn't animate scene {i + 1} ({str(e)[:200]}); it stays as pictures.")
+    return out
+
+
+def moment_segment(cfg, clip, pics, cap, wav, seg, w, h, work, zoom_in=True):
+    """A scene that opens with its animated clip, then carries on with its pictures for the rest of the narration."""
+    clip_len, voice_len = duration(clip), duration(wav)
+    if voice_len <= clip_len + 1.5:
+        return clip_segment(cfg, clip, cap, wav, seg, w, h)
+    stem = seg.with_suffix("")
+    a_wav, b_wav = Path(f"{stem}_a.wav"), Path(f"{stem}_b.wav")
+    a_mp4, b_mp4 = Path(f"{stem}_a.mp4"), Path(f"{stem}_b.mp4")
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), "-t", f"{clip_len:.3f}", str(a_wav)])
+    run(["ffmpeg", "-y", "-v", "error", "-ss", f"{clip_len:.3f}", "-i", str(wav), str(b_wav)])
+    vid = (f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps=30,setsar=1[bg];"
+           f"[bg][1]overlay=0:0,format=yuv420p[v]")
+    vol = float(cfg["CLIP_SOUND_VOLUME"])
+    aud = (f";[0:a]{AFMT},volume={vol},apad[ca];[2:a]{AFMT},apad[na];[ca][na]amix=inputs=2:duration=longest:normalize=0[a]"
+           if has_audio(clip) and vol > 0 else f";[2:a]{AFMT},apad[a]")
+    run(["ffmpeg", "-y", "-v", "error", "-i", str(clip), "-i", str(cap), "-i", str(a_wav),
+         "-filter_complex", vid + aud, "-map", "[v]", "-map", "[a]", "-t", f"{clip_len:.3f}", *ENC, str(a_mp4)])
+    still_segment(cfg, pics, cap, b_wav, b_mp4, w, h, zoom_in=zoom_in)
+    lst = Path(f"{stem}_list.txt")
+    lst.write_text(f"file '{a_mp4}'\nfile '{b_mp4}'\n")
+    run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(seg)])
+
+
 def make_video(cfg, story, wavs, job, work, w, h, portrait, out_path, vprovider, ref):
     scenes = story["scenes"]
     if vprovider == "existing":                # remaking: only clips already made, pictures for the rest
@@ -4806,6 +4902,10 @@ def make_video(cfg, story, wavs, job, work, w, h, portrait, out_path, vprovider,
             if found:
                 extras[i] = found
 
+    moments = {}
+    if all(c is None for c in clips):          # a picture story: animate its biggest moments, if asked for
+        moments = moment_clips(cfg, story, job, pics, portrait, ref, reuse_only=vprovider == "existing")
+
     log("Building the video…")
     segs = []
     cap = work / "cap_00.png"
@@ -4818,6 +4918,9 @@ def make_video(cfg, story, wavs, job, work, w, h, portrait, out_path, vprovider,
         segs.append(work / f"seg_{i + 1:02d}.mp4")
         if clips[i]:
             clip_segment(cfg, clips[i], cap, wavs[i + 1], segs[-1], w, h)
+        elif moments.get(i):
+            moment_segment(cfg, moments[i], [pics[i]] + extras.get(i, []), cap, wavs[i + 1], segs[-1], w, h, work,
+                           zoom_in=i % 2 == 1)
         else:
             still_segment(cfg, [pics[i]] + extras.get(i, []), cap, wavs[i + 1], segs[-1], w, h, zoom_in=i % 2 == 1)
         log(f"Video part {i + 1}/{len(scenes)} done")
@@ -4852,6 +4955,13 @@ def estimate(cfg, mode, scenes, vprovider, book=False, writes=1, words_per_scene
             items.append((f"{scenes} video clip{'s' * (scenes != 1)}", scenes * 8 * per))
         elif vprovider == "slideshow" and pick_image_provider(cfg) in ("openai", "gemini"):
             items.append((f"{scenes} pictures", scenes * f("PRICE_IMAGE")))
+        if vprovider == "slideshow" and cfg.get("GEMINI_API_KEY"):
+            try:
+                bm = max(0, min(5, int(cfg.get("BIG_MOMENTS") or 0), scenes))
+            except ValueError:
+                bm = 0
+            if bm:
+                items.append((f"{bm} animated big moment{'s' * (bm != 1)}", bm * 8 * f("PRICE_VEO_PER_SEC")))
         if ref_provider(cfg) in ("openai", "gemini"):
             items.append(("character sheet", f("PRICE_IMAGE")))
     elif book and pick_image_provider(cfg) in ("openai", "gemini"):
@@ -5366,6 +5476,196 @@ def export_pdf(cfg, run_id):
             if (folder / "story-book.pdf").exists() else None}
 
 
+# ───────────────────────────── exports: EPUB and a print-ready book ─────────────────────────────
+
+def _fresh(out, *sources):
+    """True if `out` exists and is newer than every source (so it doesn't need making again)."""
+    return out.exists() and all(not s_.exists() or s_.stat().st_mtime <= out.stat().st_mtime for s_ in sources)
+
+
+def _epub_image(src, dst, width=1400):
+    im = Image.open(src).convert("RGB")
+    if im.width > width:
+        im = im.resize((width, int(im.height * width / im.width)), Image.LANCZOS)
+    im.save(dst, "JPEG", quality=82)
+
+
+def export_epub(cfg, run_id):
+    """story.epub: for Apple Books, Kindle (send-to-Kindle takes EPUB) and any e-reader, with the pictures.
+    A choose-your-own-adventure keeps working: each choice is a link to where it leads."""
+    import html as H
+    import uuid
+    import zipfile
+    folder = story_folder(cfg, run_id)
+    out = folder / "story.epub"
+    story_f, adv_f = folder / "story.json", folder / "adventure.json"
+    if _fresh(out, story_f, adv_f):
+        return {"ok": True, "epub": str(out)}
+    story = json.loads(story_f.read_text())
+    result = json.loads((folder / "result.json").read_text())
+    adv = json.loads(adv_f.read_text()) if adv_f.exists() else None
+    title = story.get("title") or result.get("title") or "Story"
+    e = lambda t: H.escape(str(t), quote=True)
+    uid = f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, 'storymaker:' + run_id)}"
+    files, manifest, spine, nav = {}, [], [], []
+
+    def page(name, heading, body):
+        files[f"OEBPS/{name}"] = (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
+                                  f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="en">'
+                                  f'<head><meta charset="utf-8"/><title>{e(heading)}</title>'
+                                  f'<link rel="stylesheet" href="style.css"/></head><body>{body}</body></html>')
+        manifest.append(f'<item id="{name.split(".")[0]}" href="{name}" media-type="application/xhtml+xml"/>')
+        spine.append(f'<itemref idref="{name.split(".")[0]}"/>')
+        nav.append((name, heading))
+
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        cover_src = next((p_ for p_ in (folder / "cover.jpg", folder / "thumb.jpg", folder / "scene_01.png") if p_.exists()), None)
+        cover_html = ""
+        if cover_src:
+            _epub_image(cover_src, td / "cover.jpg", 1600)
+            files["OEBPS/images/cover.jpg"] = (td / "cover.jpg").read_bytes()
+            manifest.append('<item id="cover-image" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>')
+            cover_html = '<figure class="cover"><img src="images/cover.jpg" alt=""/></figure>'
+        sub = f"{result['series']}, episode {result['episode']}" if result.get("series") and result.get("episode", 1) > 1 else ""
+        page("title.xhtml", title, f'{cover_html}<h1 class="title">{e(title)}</h1>'
+             + (f'<p class="sub">{e(sub)}</p>' if sub else "")
+             + (f'<p class="logline">{e(story.get("logline"))}</p>' if story.get("logline") else ""))
+        if adv:
+            order = list(adv["passages"])
+            num = {k: i + 1 for i, k in enumerate(order)}
+            body = ['<h2>How to read this book</h2><p>At the end of each part you choose what happens. Tap your choice to '
+                    'go there. There are several endings: go back and try another path.</p>']
+            for k in order:
+                p_ = adv["passages"][k]
+                body.append(f'<section id="p{num[k]}" class="passage"><h3>{num[k]}</h3>'
+                            + "".join(f"<p>{e(x)}</p>" for x in paragraphs(p_["text"])))
+                if p_.get("choices"):
+                    body.append('<ul class="choices">' + "".join(
+                        f'<li><a href="#p{num[c["to"]]}">{e(c["label"])}</a></li>' for c in p_["choices"]) + "</ul>")
+                else:
+                    body.append(f'<p class="end">The End <span>({e(p_.get("ending", "the end"))})</span></p>'
+                                f'<p class="again"><a href="#p1">Start again</a></p>')
+                body.append("</section>")
+            page("story.xhtml", title, "".join(body))
+        else:
+            groups, cur = [], None                 # one file per chapter (or one for a short story)
+            for i, sc in enumerate(story.get("scenes") or []):
+                if cur is None or sc.get("chapter_title"):
+                    cur = {"title": f"Chapter {sc['chapter']}: {sc['chapter_title']}" if sc.get("chapter_title") else title,
+                           "scenes": []}
+                    groups.append(cur)
+                cur["scenes"].append((i, sc))
+            for g_n, g in enumerate(groups, 1):
+                body = [f"<h2>{e(g['title'])}</h2>"] if len(groups) > 1 else []
+                for i, sc in g["scenes"]:
+                    img = folder / f"scene_{i + 1:02d}.png"
+                    if img.exists():
+                        _epub_image(img, td / f"scene_{i + 1:02d}.jpg")
+                        files[f"OEBPS/images/scene_{i + 1:02d}.jpg"] = (td / f"scene_{i + 1:02d}.jpg").read_bytes()
+                        manifest.append(f'<item id="img{i + 1}" href="images/scene_{i + 1:02d}.jpg" media-type="image/jpeg"/>')
+                        body.append(f'<figure><img src="images/scene_{i + 1:02d}.jpg" alt=""/></figure>')
+                    body += [f"<p>{e(x)}</p>" for x in paragraphs(sc.get("narration", ""))]
+                if g_n == len(groups):
+                    body.append('<p class="end">The End</p>')
+                page(f"part{g_n:02d}.xhtml", g["title"], "".join(body))
+    files["OEBPS/style.css"] = ("body{font-family:Georgia,serif;line-height:1.55;margin:0 4%}h1.title{text-align:center;"
+                                "margin-top:1.2em}p{margin:0 0 .9em;text-indent:0}.sub,.logline{text-align:center;"
+                                "font-style:italic}figure{margin:1.2em 0;text-align:center}figure img{max-width:100%}"
+                                ".cover img{max-height:70vh}.end{text-align:center;font-style:italic;margin-top:2em}"
+                                ".choices{list-style:none;padding:0}.choices li{margin:.6em 0}.choices a{font-weight:bold}"
+                                ".passage{margin-bottom:2.5em}.passage h3{text-align:center}")
+    manifest.append('<item id="css" href="style.css" media-type="text/css"/>')
+    nav_items = "".join(f'<li><a href="{n}">{e(t)}</a></li>' for n, t in nav)
+    files["OEBPS/nav.xhtml"] = (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" '
+                                f'xmlns:epub="http://www.idpf.org/2007/ops" lang="en"><head><meta charset="utf-8"/><title>Contents</title></head>'
+                                f'<body><nav epub:type="toc" id="toc"><h1>Contents</h1><ol>{nav_items}</ol></nav></body></html>')
+    manifest.append('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>')
+    modified = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    files["OEBPS/content.opf"] = (f'<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" '
+                                  f'version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                                  f'<dc:identifier id="bookid">{uid}</dc:identifier><dc:title>{e(title)}</dc:title>'
+                                  f'<dc:language>en</dc:language><dc:creator>StoryMaker</dc:creator>'
+                                  + (f'<dc:description>{e(story.get("logline"))}</dc:description>' if story.get("logline") else "")
+                                  + f'<meta property="dcterms:modified">{modified}</meta></metadata>'
+                                  f'<manifest>{"".join(manifest)}</manifest><spine>{"".join(spine)}</spine></package>')
+    files["META-INF/container.xml"] = ('<?xml version="1.0" encoding="utf-8"?>\n<container version="1.0" '
+                                       'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                                       '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
+                                       '</rootfiles></container>')
+    tmp = out.with_suffix(".epub.part")
+    with zipfile.ZipFile(tmp, "w") as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        for name, data in files.items():
+            z.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
+    tmp.replace(out)
+    return {"ok": True, "epub": str(out)}
+
+
+def export_print(cfg, run_id):
+    """story-print.pdf: a picture book ready for a printer (Lulu, Amazon KDP, a local print shop): 8.5 × 8.5 inch
+    pages with 1/8 inch bleed at 300 dpi; each picture fills a left-hand page and its words face it. Plus
+    story-print-cover.pdf, the front cover on its own, which print services ask for separately."""
+    folder = story_folder(cfg, run_id)
+    out, cover_out = folder / "story-print.pdf", folder / "story-print-cover.pdf"
+    story_f = folder / "story.json"
+    story = json.loads(story_f.read_text())
+    scenes = story.get("scenes") or []
+    imgs = [folder / f"scene_{i + 1:02d}.png" for i in range(len(scenes))]
+    if not any(p_.exists() for p_ in imgs):
+        return {"ok": False, "error": "This story has no pictures yet. Make it as a video or with a picture book, or "
+                                      "use Remake the audio with new pictures, then try again."}
+    if _fresh(out, story_f, *[p_ for p_ in imgs if p_.exists()]) and cover_out.exists():
+        return {"ok": True, "pdf": str(out), "cover": str(cover_out)}
+    dpi, trim, bleed = 300, 8.5, 0.125
+    S = int((trim + 2 * bleed) * dpi)               # 2625 px square, bleed included
+    safe = int((bleed + 0.5) * dpi)                 # words stay half an inch inside the trim
+    paper, ink, faint = (253, 250, 244), (35, 30, 26), (140, 128, 116)
+    pages = []
+
+    def blank():
+        return Image.new("RGB", (S, S), paper)
+
+    cover_src = next((p_ for p_ in (folder / "cover.jpg", *imgs) if p_.exists()), None)
+    cover = blank()
+    if cover_src:
+        cover.paste(fit_cover(Image.open(cover_src).convert("RGB"), S, S), (0, 0))
+    band = Image.new("RGBA", (S, int(S * 0.30)), (20, 18, 30, 170))
+    cover.paste(band, (0, S - band.height), band)
+    text_block(ImageDraw.Draw(cover), story.get("title", ""), (safe, S - band.height + 60, S - safe, S - safe), 150,
+               color=(250, 246, 238), min_size=70)
+    cover.save(cover_out, "PDF", resolution=dpi)
+
+    title = blank()                                  # page 1 (a right-hand page): the title
+    d = ImageDraw.Draw(title)
+    text_block(d, story.get("title", ""), (safe, int(S * 0.30), S - safe, int(S * 0.55)), 140, min_size=70)
+    if story.get("logline"):
+        text_block(d, story["logline"], (safe + 150, int(S * 0.58), S - safe - 150, int(S * 0.75)), 64, italic=True,
+                   color=faint)
+    pages.append(title)                              # page 1 is on the right, so every picture lands on a left page
+    for i, (sc, img) in enumerate(zip(scenes, imgs)):
+        pic = blank()
+        if img.exists():
+            pic.paste(fit_cover(Image.open(img).convert("RGB"), S, S), (0, 0))     # full bleed
+        words = blank()
+        dd = ImageDraw.Draw(words)
+        text_block(dd, sc.get("narration", ""), (safe + 60, safe + 40, S - safe - 60, S - safe - 120), 66,
+                   color=ink, min_size=40)
+        n_ = str(len(pages) + 2)
+        f_ = serif_font(40)
+        dd.text(((S - dd.textlength(n_, font=f_)) / 2, S - safe - 20), n_, font=f_, fill=faint)
+        pages += [pic, words]
+    end = blank()
+    text_block(ImageDraw.Draw(end), "The End", (safe, 0, S - safe, S), 160, italic=True)
+    pages.append(end)
+    while len(pages) % 4:                            # printers bind in groups of four pages
+        pages.append(blank())
+    tmp = out.with_suffix(".pdf.part")
+    pages[0].save(tmp, "PDF", resolution=dpi, save_all=True, append_images=pages[1:])
+    tmp.replace(out)
+    return {"ok": True, "pdf": str(out), "cover": str(cover_out), "pages": len(pages)}
+
+
 def delete_story(cfg, run_id):
     """Remove a finished story's folder and its place in its series (an empty series goes too)."""
     folder = story_folder(cfg, run_id)
@@ -5748,7 +6048,7 @@ def rebuild_video(cfg, folder, story, final, timeline, job, redraw=False):
     new audio `final`. The old video is kept as story.before.mp4 the first time."""
     job = Path(job)
     job.mkdir(parents=True, exist_ok=True)
-    for f_ in folder.glob("clip_*.mp4"):
+    for f_ in list(folder.glob("clip_*.mp4")) + list(folder.glob("moment_*.mp4")):
         shutil.copy(f_, job / f_.name)
     if redraw:                    # new illustrations: planned again from each scene, drawn by the picture app
         for sc in story.get("scenes") or []:
@@ -6001,6 +6301,8 @@ def run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series):
 
 def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, clip_mode, w, h):
     write_status(cfg, job_id, state="running", step="writing")
+    if getattr(args, "adventure", False):
+        return make_adventure(cfg, args, idea, job_id, job, level)
 
     # A continuing series reuses its character sheet so the characters look the same as last time.
     if series:
@@ -6110,6 +6412,10 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
             for i, c in enumerate(clips):
                 if c:
                     shutil.copy(c, out_dir / f"clip_{i + 1:02d}.mp4")
+            for m_ in job.glob("moment_[0-9][0-9].mp4"):          # animated big moments, kept for remakes
+                shutil.copy(m_, out_dir / m_.name)
+            if story.get("big_moments"):
+                (out_dir / "story.json").write_text(json.dumps(story, indent=2))
             for i, p_ in pics.items():
                 shutil.copy(p_, out_dir / f"scene_{i + 1:02d}.png")
             for p_ in job.glob("pic_[0-9][0-9]_[0-9].png"):     # the extra pictures of long scenes, kept too
@@ -6186,12 +6492,221 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
     return result
 
 
+# ───────────────────────────── choose your own adventure ─────────────────────────────
+ADVENTURE_PROMPT = """You are writing a choose-your-own-adventure story that will be read aloud. The listener decides
+what happens at each turning point.
+
+Story idea: {idea}
+Genre: {genre}
+Reader: {audience}
+{rules}
+Write the whole branching story as JSON only, in exactly this shape:
+{{"title": "a title", "logline": "one sentence that makes you want to play",
+  "characters": "Name, a short description; Name, a short description",
+  "start": "a",
+  "passages": {{
+    "a": {{"text": "the opening…", "choices": [{{"label": "Follow the light into the cave", "to": "b"}},
+                                         {{"label": "Row back to the boat", "to": "c"}}]}},
+    "b": {{"text": "…", "choices": [ … ]}},
+    "z": {{"text": "…the last lines of this ending.", "ending": "happy"}}
+  }}}}
+
+Rules:
+- Every path from the start passes {depth} decisions before it reaches an ending. Each decision has 2 choices
+  (3 at most). Paths may join up again, so the story stays a sensible size: about {total} passages in all.
+- At least {endings} different endings. Make them feel earned: mostly good or bittersweet, some funny or surprising.
+  An ending's "ending" is one word: happy, bittersweet, funny, sad or surprising.
+- Each passage is {words} words of vivid narration with a little dialogue in quotes. It carries straight on from the
+  choice that led to it (it can say what the reader decided), and every passage that isn't an ending stops right at
+  the moment of decision.
+- Choice labels are short (under 10 words), clear and tempting, written as what the reader does.
+- Passage ids are short and lowercase. Every "to" names a passage that exists. Endings have "ending" and no "choices".
+- The characters keep the same names and personalities on every path.
+"""
+
+
+def tidy_adventure(adv):
+    """Make sure the branching story works: every choice leads somewhere, every passage can be reached, and every
+    path can still reach an ending."""
+    raw = adv.get("passages") or {}
+    if isinstance(raw, list):                                  # some writers send a list of {id, text, choices}
+        raw = {str(p.get("id")): p for p in raw if isinstance(p, dict) and p.get("id") is not None}
+    P = {}
+    for k, p in raw.items():
+        if isinstance(p, dict) and str(p.get("text") or "").strip():
+            P[str(k).strip()] = {"text": str(p["text"]).strip(), "choices": p.get("choices") or [],
+                                 "ending": p.get("ending")}
+    if len(P) < 3:
+        raise ValueError("The adventure came back too short. Try again.")
+    for k, p in P.items():
+        seen, good = set(), []
+        for c in p["choices"] if isinstance(p["choices"], list) else []:
+            if not isinstance(c, dict):
+                continue
+            to, label = str(c.get("to") or "").strip(), str(c.get("label") or "").strip()
+            if to in P and to != k and label and to not in seen:
+                seen.add(to)
+                good.append({"label": label[:120], "to": to})
+        p["choices"] = good[:3]
+    start = str(adv.get("start") or "").strip()
+    if start not in P:
+        start = next(iter(P))
+    # every passage must be able to reach an ending; a choice that only goes round in circles is dropped
+    def ends_from(k, path=()):
+        p = P[k]
+        if not p["choices"]:
+            return True
+        return any(c["to"] not in path and ends_from(c["to"], path + (k,)) for c in p["choices"])
+    for k, p in P.items():
+        p["choices"] = [c for c in p["choices"] if ends_from(c["to"], (k,))]
+    for p in P.values():
+        if not p["choices"]:
+            p["ending"] = str(p.get("ending") or "the end").strip().lower()[:20] or "the end"
+            p.pop("choices")
+        else:
+            p.pop("ending", None)
+    reach, todo = [], [start]                    # keep what can be reached, in reading order
+    while todo:
+        k = todo.pop(0)
+        if k in reach:
+            continue
+        reach.append(k)
+        todo += [c["to"] for c in P[k].get("choices", [])]
+    P = {k: P[k] for k in reach}
+    if not any("ending" in p for p in P.values()) or len(P) < 3:
+        raise ValueError("The adventure didn't hold together. Try again.")
+    return {"title": str(adv.get("title") or "An Adventure").strip()[:120], "logline": str(adv.get("logline") or "").strip(),
+            "characters": adv.get("characters") or "", "start": start, "passages": P}
+
+
+def demo_adventure(idea):
+    t = idea.strip().rstrip(".") or "the lost lantern"
+    return {"title": f"The Choice of {t.title()}", "logline": f"A demo adventure about {t}.",
+            "characters": "Mira, a curious girl; Old Tom, the lighthouse keeper", "start": "a", "passages": {
+        "a": {"text": "Mira found a lantern glowing on the beach. “Where did you come from?” she whispered. A path led "
+                      "to the cliffs, and a little boat bobbed by the pier.",
+              "choices": [{"label": "Climb the cliff path", "to": "b"}, {"label": "Take the little boat", "to": "c"}]},
+        "b": {"text": "The path wound up to the lighthouse, where Old Tom was waiting. “You found it,” he said.",
+              "choices": [{"label": "Give Tom the lantern", "to": "d"}, {"label": "Keep it and run", "to": "e"}]},
+        "c": {"text": "The boat drifted out to a cave full of tiny lights, all blinking like they were saying hello.",
+              "choices": [{"label": "Row into the cave", "to": "f"}, {"label": "Row home", "to": "e"}]},
+        "d": {"text": "Tom hung the lantern at the top, and every ship at sea found its way home that night.", "ending": "happy"},
+        "e": {"text": "Mira hurried home and hid the lantern under her bed. It glowed softly all night, keeping its secret.",
+              "ending": "bittersweet"},
+        "f": {"text": "The lights were fireflies of the sea, and they followed her home, a river of stars behind the boat.",
+              "ending": "surprising"}}}
+
+
+def adventure_markdown(adv):
+    """The whole adventure on paper: every passage, and where each choice leads."""
+    order = list(adv["passages"])
+    num = {k: i + 1 for i, k in enumerate(order)}
+    out = [f"# {adv['title']}", ""]
+    if adv.get("logline"):
+        out += [f"*{adv['logline']}*", ""]
+    out += ["*A choose-your-own-adventure: start at 1 and choose.*", ""]
+    for k in order:
+        p = adv["passages"][k]
+        out += [f"## {num[k]}", "", p["text"], ""]
+        if p.get("choices"):
+            out += [f"- {c['label']}: turn to {num[c['to']]}." for c in p["choices"]] + [""]
+        else:
+            out += [f"**The End** ({p.get('ending', 'the end')})", ""]
+    return "\n".join(out)
+
+
+def adventure_spoken(p):
+    if not p.get("choices"):
+        return p["text"] + " The end."
+    labels = [c["label"].rstrip(".!?") for c in p["choices"]]
+    return p["text"] + " What will you do? " + " Or ".join(f"{l}?" for l in labels)
+
+
+def make_adventure(cfg, args, idea, job_id, job, level):
+    """--adventure: a branching story. Written in one go, checked so every path works, then (in audio or video mode)
+    each passage is read by the narrator. The page plays it: listen, then pick what happens next."""
+    mode = "audio" if args.mode in ("audio", "video") else "story"
+    progress_start(cfg, job_id, job, mode, False)
+    audience, rules, length = level_info(level)
+    rules += style_rules(cfg.get("_PREFS"), level) + style_block(cfg.get("_STYLE"), level) + WRITING_CRAFT
+    if cfg.get("_BEDTIME"):
+        rules += BEDTIME_RULES
+    depth = {"brief": 2, "standard": 3, "rich": 3, "epic": 4}.get(args.detail, 3)
+    words = {"brief": "60–90", "standard": "100–150", "rich": "160–220", "epic": "180–260"}.get(args.detail, "100–150")
+    words = "–".join(str(max(30, int(int(x) * length))) for x in words.split("–"))
+    total, endings = {2: (7, 3), 3: (12, 4), 4: (18, 5)}[depth]
+    adv_file = job / "adventure.json"
+    if adv_file.exists():
+        adv = json.loads(adv_file.read_text())
+        log(f"Resuming the adventure '{adv['title']}'.")
+    else:
+        provider = cfg["STORY_PROVIDER"].lower()
+        with Ticker("writing", "Writing the adventure and all its paths", 200 if provider == "ollama" else 40):
+            if provider == "demo":
+                raw = demo_adventure(idea)
+            else:
+                raw = ask_writer(cfg, ADVENTURE_PROMPT.format(idea=idea, genre=args.genre, audience=audience, rules=rules,
+                                                              depth=depth, total=total, endings=endings, words=words),
+                                 think="plan")
+            adv = tidy_adventure(raw)
+        if cfg.get("_BEDTIME"):
+            adv["bedtime"] = True
+        adv_file.write_text(json.dumps(adv, indent=2))
+    P = adv["passages"]
+    n_end = sum(1 for p in P.values() if "ending" in p)
+    report("writing", 1, f"Adventure written: {len(P)} passages, {n_end} endings", title=adv["title"],
+           logline=adv.get("logline", ""), opening=P[adv["start"]]["text"][:320])
+    run_id = f"{dt.datetime.now():%Y-%m-%d_%H%M%S}_{slugify(adv['title'])}"
+    out_dir = Path(os.path.expanduser(cfg["OUTPUT_DIR"])) / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    story = {"title": adv["title"], "logline": adv.get("logline", ""), "characters": adv.get("characters", ""),
+             "adventure": True, "genre": args.genre, "level": level, "bedtime": bool(adv.get("bedtime")),
+             "scenes": [{"heading": f"Passage {i + 1}", "narration": adventure_spoken(p), "lines": [],
+                         "image_prompt": p["text"][:300], "passage": k} for i, (k, p) in enumerate(P.items())]}
+    md = adventure_markdown(adv)
+    (out_dir / "story.md").write_text(md)
+    (out_dir / "story.json").write_text(json.dumps(story, indent=2))
+    if mode == "audio":
+        engine = pick_tts(cfg)
+        voice = args.narrator if engine == "kokoro" and args.narrator and VOICE_SPEC.match(args.narrator) else None
+        for i, (k, p) in enumerate(P.items()):
+            mp3 = job / f"passage_{k}.mp3"
+            if not valid_media(mp3):
+                wav = job / f"passage_{k}.wav"
+                narrate(cfg, adventure_spoken(p), wav, engine, voice)
+                run(["ffmpeg", "-y", "-v", "error", "-i", str(wav), "-af", "apad=pad_dur=0.6", "-c:a", "libmp3lame",
+                     "-b:a", "128k", str(mp3)])
+                wav.unlink(missing_ok=True)
+            shutil.copy(mp3, out_dir / f"passage_{k}.mp3")
+            p["audio"] = f"passage_{k}.mp3"
+            report("narration", (i + 1) / len(P), f"Reading the passages aloud: {i + 1} of {len(P)}")
+    (out_dir / "adventure.json").write_text(json.dumps(adv, indent=2))
+    report("finishing", 0.4, "Painting the cover")
+    try:
+        make_cover(cfg, story, out_dir, level)
+    except Exception as e:
+        log(f"Cover skipped ({e}).")
+    make_thumbnail(out_dir, [out_dir / "cover.jpg"])
+    request = {"idea": idea, "genre": args.genre, "level": level, "mode": mode, "detail": args.detail,
+               "adventure": True, "bedtime": bool(adv.get("bedtime")), "narrator": args.narrator or ""}
+    result = {"ok": True, "job_id": job_id, "request": request, "title": adv["title"], "logline": adv.get("logline", ""),
+              "level": level, "story": md, "folder": str(out_dir), "adventure": True, "passages": len(P),
+              "endings": n_end, "bedtime": bool(adv.get("bedtime")), "story_file": str(out_dir / "story.md"),
+              "mode": mode, "episode": 1, "created": dt.datetime.now().isoformat(timespec="seconds"), "run_id": run_id}
+    (out_dir / "result.json").write_text(json.dumps(result, indent=2))
+    shutil.rmtree(job, ignore_errors=True)
+    write_status(cfg, job_id, state="done", result=result)
+    return result
+
+
 def job_key(args, idea, cfg, scenes, vprovider, level, series):
     parts = [idea, args.genre, args.audience or "", level, str(scenes), args.mode, cfg["STORY_PROVIDER"],
              vprovider, str(args.portrait), str(args.book),
              series["slug"] if series else "", str(len(done_episodes(series))) if series else "",
              str(args.chapters), args.detail, args.keywords or "", args.sounds or "", args.narrator or "",
              json.dumps(cfg.get("_PREFS") or {}, sort_keys=True)]
+    if getattr(args, "adventure", False):
+        parts.append("adventure")
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:12]
 
 
@@ -6277,6 +6792,8 @@ def main():
     ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--features", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--export-pdf", metavar="STORY", help="make a reading-copy PDF of a finished story (folder name)")
+    ap.add_argument("--export-epub", metavar="STORY", help="make an EPUB e-book of a finished story")
+    ap.add_argument("--export-print", metavar="STORY", help="make a print-ready picture book (8.5 in square, bleed, 300 dpi)")
     ap.add_argument("--delete", metavar="STORY", help="delete a finished story (folder name) and its series entry")
     ap.add_argument("--edit", metavar="STORY", help="change a finished story's text (JSON on stdin)")
     ap.add_argument("--rewrite", metavar="STORY", help="rewrite part of a story with the AI (instructions on stdin)")
@@ -6292,6 +6809,10 @@ def main():
     ap.add_argument("--redesign", action="store_true", help="with --remaster: choose the sounds again")
     ap.add_argument("--redraw", action="store_true", help="with --remaster: draw new pictures for the video and book")
     ap.add_argument("--draw-portraits", metavar="SERIES_SLUG", help="draw a portrait for every character in a series' bible")
+    ap.add_argument("--big-moments", type=int, choices=range(0, 6), metavar="N",
+                    help="animate this many of the most dramatic scenes (Veo, paid) in a picture video")
+    ap.add_argument("--adventure", action="store_true",
+                    help="a choose-your-own-adventure: the reader picks what happens at each turning point")
     ap.add_argument("--bedtime", action="store_true",
                     help="a calm story for winding down: no scares, soft sounds, a slower narrator")
     ap.add_argument("--picture-style", choices=sorted(PICTURE_STYLES),
@@ -6504,6 +7025,12 @@ def main():
                      result={"run_id": run_id})
         print(json.dumps(out if isinstance(out, dict) else {"ok": True}))
         return
+    if args.export_epub or args.export_print:
+        try:
+            print(json.dumps(export_epub(cfg, args.export_epub) if args.export_epub else export_print(cfg, args.export_print)))
+        except (ValueError, OSError) as e:
+            print(json.dumps({"ok": False, "error": str(e)}))
+        return
     if args.export_pdf or args.delete:
         try:
             print(json.dumps(export_pdf(cfg, args.export_pdf) if args.export_pdf else delete_story(cfg, args.delete)))
@@ -6535,6 +7062,8 @@ def main():
     cfg["_PREFS"] = {k: v for k, v in prefs.items() if v}
     if args.bedtime:
         bedtime_config(cfg)
+    if args.big_moments is not None:
+        cfg["BIG_MOMENTS"] = str(args.big_moments)
 
     if level == "explicit":
         # Adults only, and it never leaves this computer: the online AIs don't allow it and could

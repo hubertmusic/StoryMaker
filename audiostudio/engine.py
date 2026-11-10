@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "3.4 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "3.5 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -2020,14 +2020,17 @@ def update_sounds(cfg, pid, sounds, wishes=None):
 def add_voice_clip(cfg, data, filename, name, gender, accent=""):
     """Your own voice clip (10–30 seconds of clear speech; only voices you have the right to use)."""
     ext = Path(filename).suffix.lower()
-    if ext not in (".wav", ".mp3", ".m4a", ".flac"):
+    if ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg", ".mp4"):   # (the last three: recorded on the page)
         raise ValueError("Use a .wav, .mp3, .m4a or .flac clip.")
     vdir = studio_dir(cfg) / "voices"
     safe = sm.slugify(name or Path(filename).stem)[:40] or "voice"
     tmp = vdir / f".upload{ext}"
     tmp.write_bytes(data)
     out = vdir / f"{safe}.wav"
-    sm.run(["ffmpeg", "-y", "-v", "error", "-i", str(tmp), "-t", "30", "-ac", "1", "-ar", "24000", str(out)])
+    # quiet start trimmed, rumble taken out and the level evened, so Chatterbox hears the voice clearly
+    sm.run(["ffmpeg", "-y", "-v", "error", "-i", str(tmp), "-af",
+            "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.2,highpass=f=70,loudnorm=I=-20:TP=-2",
+            "-t", "30", "-ac", "1", "-ar", "24000", str(out)])
     tmp.unlink(missing_ok=True)
     if sm.duration(out) < 5:
         out.unlink(missing_ok=True)

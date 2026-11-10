@@ -990,13 +990,55 @@ $("openLib").onclick = () => {
 };
 $("libEngine").addEventListener("change", renderLib);
 $("voiceLib").addEventListener("close", () => $("player").pause());
+// record a voice right here (needs the page open on the Mac itself, or at a secure https address)
+let recBlob = null, recorder = null, recTimer = null;
+$("recBtn").addEventListener("click", async () => {
+  if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+  if (!window.isSecureContext || !navigator.mediaDevices || !window.MediaRecorder) {
+    $("recState").textContent = "Recording works when this page is open on the Mac itself (localhost) or at its https address. Or choose a recording below.";
+    return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: false } }); }
+  catch { $("recState").textContent = "The microphone wasn't allowed. Allow it for this page and try again."; return; }
+  const type = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  const parts = [];
+  recorder.ondataavailable = (ev) => { if (ev.data.size) parts.push(ev.data); };
+  const started = Date.now();
+  recorder.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop()); clearInterval(recTimer);
+    const secs = Math.round((Date.now() - started) / 1000);
+    recBlob = new Blob(parts, { type: recorder.mimeType || "audio/webm" });
+    $("recPreview").src = URL.createObjectURL(recBlob); $("recPreview").hidden = false;
+    $("recBtn").textContent = "Record again"; $("recScript").hidden = true;
+    $("recState").textContent = secs < 10 ? `Only ${secs} seconds: 20–30 sounds much more like you. Record again?` : `Recorded ${secs} seconds. Listen back, then name it and press Add the voice.`;
+  };
+  recorder.start(500);
+  $("recScript").hidden = false; $("recPreview").hidden = true; recBlob = null;
+  $("recBtn").textContent = "Stop recording";
+  recTimer = setInterval(() => {
+    const t = Math.round((Date.now() - started) / 1000);
+    $("recState").textContent = `Recording… ${t}s`;
+    if (t >= 40) recorder.stop();
+  }, 500);
+});
 $("uploadForm").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const file = $("clipFile").files[0];
+  if (!file && !recBlob) { $("clipMsg").textContent = "Record your voice or choose a recording first."; return; }
   const fd = new FormData();
-  fd.append("file", $("clipFile").files[0]); fd.append("name", $("clipName").value); fd.append("gender", $("clipGender").value);
+  if (file) fd.append("file", file);
+  else fd.append("file", recBlob, (recBlob.type || "").includes("mp4") ? "recording.mp4" : "recording.webm");
+  fd.append("name", $("clipName").value); fd.append("gender", $("clipGender").value);
   $("clipGo").disabled = true; $("clipMsg").textContent = "Adding…";
   const r = await api("/api/voices/upload", { method: "POST", body: fd });
   $("clipGo").disabled = false;
   $("clipMsg").textContent = r.ok ? "Added. Pick it for anyone in the cast." : r.error || "Not added.";
-  if (r.ok) { voices = (await api("/api/voices")).voices || voices; renderLib(); $("uploadForm").reset(); if (book && tab === "cast") renderCast(); }
+  if (r.ok) {
+    voices = (await api("/api/voices")).voices || voices; renderLib(); $("uploadForm").reset();
+    recBlob = null; $("recPreview").hidden = true; $("recState").textContent = ""; $("recBtn").textContent = "Record my voice here";
+    $("clipMsg").textContent = "Added. Pick it as the narrator (Make the audiobook) or for anyone in the cast. It's used with Chatterbox.";
+    if (book && tab === "cast") renderCast();
+  }
 });

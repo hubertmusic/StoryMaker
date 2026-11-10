@@ -940,3 +940,30 @@ everything done so far, so another story or book can go first. Resume carries on
   and what it's recording), plus what finished lately.
 - **On the lock screen:** a playing story shows its title, cover and skip and chapter buttons on the lock screen
   and in Control Center. *Listen only* plays a video story as sound, so it keeps going with the screen off.
+
+## 28. Your own voice, choose-your-own-adventure, animated big moments, exports
+
+- **Your own voice (Audio Studio):** open the Voice library and press **Record my voice here**. Read the short passage
+  in your storytelling voice for 20–30 seconds, listen back, name it and press *Add the voice*. It's cleaned up (quiet
+  start trimmed, rumble removed, level evened) and then shows up in every voice list. Pick it as the narrator in
+  *Make the audiobook*, or for a character. It's used by Chatterbox, which copies a voice from a sample; StoryMaker's
+  own quick narrator (Kokoro) can't copy voices. So to hear a StoryMaker story in your voice, send it to Audio Studio and
+  make the audiobook there. Recording works on the Mac itself (localhost) or at an https address; anywhere else, record
+  on your phone and choose the file. Only use voices you have the right to use.
+- **Choose your own adventure** (tick box on the form): the writer makes a branching story (2–4 decisions on every
+  path and several endings) and checks that every choice leads somewhere. In Audio mode every passage is read aloud
+  and finishes with the choices. Open it in the library to play: listen, pick, go back one choice, start over.
+  It counts the endings you've found. The e-book version works too, with each choice a link.
+- **Animate the big moments** (on the form, or BIG_MOMENTS= in storymaker.env): in a picture video, the 1–3 most
+  dramatic scenes (fights, chases, the climax) open with an 8-second moving clip made by Veo from that scene's own
+  picture, then carry on with the pictures. It's online and paid (the price check shows the cost), and it needs
+  GEMINI_API_KEY. Explicit stories never use it. Remaking the audio keeps the clips. There's no free local way to do
+  this yet: on a Mac it would take hours per clip, so the free option stays the slow-moving pictures.
+- **Exports** (under every story's downloads):
+  - **E-book (EPUB):** for Apple Books, Kindle (Send to Kindle accepts EPUB) and other e-readers, with the pictures.
+  - **Print-ready book (PDF):** 8.5 × 8.5 inch pages with 1/8 inch bleed at 300 dpi, each picture on a left-hand page
+    and its words facing it, padded to a multiple of four pages. **Print cover (PDF)** is the front cover on its own.
+    This suits Lulu or a local print shop. Amazon KDP also wants a full wraparound cover (back and spine), which you
+    make with its cover creator.
+  - **For YouTube** (video stories): the title and a description with chapter times to paste in. YouTube turns them
+    into chapters.

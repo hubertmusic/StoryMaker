@@ -29,6 +29,8 @@ function formData() {
     writer: $("writer").value,
     portrait: $("portrait").checked,
     bedtime: $("bedtime").checked,
+    adventure: $("adventure").checked,
+    bigMoments: $("bigMoments").value,
     // the next episode keeps its series' look unless you picked another one for it on purpose
     pictureStyle: kind === "next" && !pictureStyleTouched ? "" : (document.querySelector('input[name="pictureStyle"]:checked') || {}).value,
     useStyle: $("useStyle").checked,
@@ -516,7 +518,109 @@ function mediaBlock(s) {
   if (id) add(`/api/stories/${encodeURIComponent(id)}/pdf`, "Story (PDF)");
   add(s.credits, "Sound credits");
   wrap.appendChild(links);
+  if (sid && s.id) wrap.appendChild(exportLinks(s));
   return wrap;
+}
+
+// ── e-book, print-ready book, YouTube ──
+function exportLinks(s) {
+  const box = document.createElement("div"); box.className = "downloads exports";
+  const id = encodeURIComponent(s.id);
+  const add = (href, label, title) => { const a = document.createElement("a"); a.href = href; a.textContent = label; a.title = title; a.download = ""; box.appendChild(a); return a; };
+  add(`/api/stories/${id}/epub`, "E-book (EPUB)", "For Apple Books, Kindle and other e-readers, with the pictures");
+  if (s.pictures && !s.adventure) {
+    add(`/api/stories/${id}/print`, "Print-ready book (PDF)", "8.5 × 8.5 inch pages with bleed at 300 dpi, for Lulu, Amazon KDP or a print shop");
+    add(`/api/stories/${id}/print?cover=1`, "Print cover (PDF)", "The front cover on its own, which print services ask for separately");
+  }
+  if (s.video) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "yt-btn"; b.textContent = "For YouTube";
+    b.setAttribute("aria-expanded", "false");
+    const panel = document.createElement("div"); panel.className = "yt-panel"; panel.hidden = true;
+    b.addEventListener("click", async () => {
+      if (!panel.hidden) { panel.hidden = true; b.setAttribute("aria-expanded", "false"); return; }
+      const r = await api(`/api/stories/${id}/youtube`, null, "GET");
+      panel.replaceChildren();
+      const mk = (label, value, rows) => {
+        const l = document.createElement("label"); l.textContent = label;
+        const t = document.createElement(rows ? "textarea" : "input"); t.readOnly = true; t.value = value; if (rows) t.rows = rows;
+        const c = document.createElement("button"); c.type = "button"; c.className = "small-btn"; c.textContent = "Copy";
+        c.addEventListener("click", async () => { try { await navigator.clipboard.writeText(value); c.textContent = "Copied"; } catch { t.select(); } });
+        panel.append(l, t, c);
+      };
+      mk("Title", r.title || s.title);
+      mk("Description, with the chapters (paste it as it is: YouTube turns the times into chapters)", r.text || "", 9);
+      const n = document.createElement("p"); n.className = "hint";
+      n.textContent = (r.note ? r.note + " " : "") + "Upload the Video download above. Picture stories with music you didn't make yourself may get a copyright claim.";
+      panel.appendChild(n);
+      panel.hidden = false; b.setAttribute("aria-expanded", "true");
+    });
+    box.append(b);
+    const wrap = document.createElement("div"); wrap.append(box, panel); return wrap;
+  }
+  return box;
+}
+
+// ── choose your own adventure ──
+function adventurePlayer(s) {
+  const box = document.createElement("section"); box.className = "adventure" + (s.bedtime ? " bedtime" : "");
+  const sid = s.id || s.run_id;
+  const advUrl = typeof s.adventure === "string" ? s.adventure : `/media/${encodeURIComponent(sid)}/adventure.json`;
+  const key = `storymaker-adv-${sid}`;
+  let adv = null, path = [], found = new Set();
+  try { const saved = JSON.parse(localStorage.getItem(key)) || {}; path = saved.path || []; found = new Set(saved.found || []); } catch { /* private */ }
+  const save = () => { try { localStorage.setItem(key, JSON.stringify({ path, found: [...found] })); } catch { /* private */ } };
+  const audio = document.createElement("audio"); audio.className = "adv-audio"; audio.controls = true; audio.preload = "auto";
+  const text = document.createElement("div"); text.className = "adv-text"; text.setAttribute("aria-live", "polite");
+  const choices = document.createElement("div"); choices.className = "adv-choices";
+  const foot = document.createElement("div"); foot.className = "adv-foot";
+  const draw = (autoplay) => {
+    const k = path[path.length - 1], p = adv.passages[k];
+    if (!p) { path = [adv.start]; return draw(false); }
+    text.replaceChildren(...p.text.split(/\n+/).filter(Boolean).map((t) => { const x = document.createElement("p"); x.textContent = t; return x; }));
+    choices.replaceChildren();
+    if (p.audio) {
+      audio.hidden = false; audio.src = advUrl.replace(/adventure\.json$/, p.audio);
+      if (autoplay) audio.play().catch(() => {});
+    } else audio.hidden = true;
+    if (p.choices && p.choices.length) {
+      const q = document.createElement("p"); q.className = "adv-q"; q.textContent = "What will you do?"; choices.appendChild(q);
+      p.choices.forEach((c) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "adv-choice"; b.textContent = c.label;
+        b.addEventListener("click", () => { path.push(c.to); save(); draw(true); box.scrollIntoView({ block: "start", behavior: "smooth" }); });
+        choices.appendChild(b);
+      });
+    } else {
+      found.add(k); save();
+      const end = document.createElement("p"); end.className = "adv-end";
+      end.textContent = `The End${p.ending && p.ending !== "the end" ? `: a ${p.ending} ending` : ""}.`;
+      const again = document.createElement("button"); again.type = "button"; again.className = "adv-choice"; again.textContent = "Start again and choose differently";
+      again.addEventListener("click", () => { path = [adv.start]; save(); draw(true); });
+      choices.append(end, again);
+    }
+    const ends = Object.values(adv.passages).filter((x) => !x.choices || !x.choices.length).length;
+    foot.replaceChildren();
+    const info = document.createElement("span"); info.className = "hint";
+    info.textContent = `Endings found: ${found.size} of ${ends}. Choices made: ${path.length - 1}.`;
+    foot.appendChild(info);
+    if (path.length > 1) {
+      const back = document.createElement("button"); back.type = "button"; back.className = "small-btn"; back.textContent = "Go back one choice";
+      back.addEventListener("click", () => { path.pop(); save(); draw(false); });
+      foot.appendChild(back);
+    }
+    if (path.length > 1) {
+      const restart = document.createElement("button"); restart.type = "button"; restart.className = "small-btn"; restart.textContent = "Start over";
+      restart.addEventListener("click", () => { path = [adv.start]; save(); draw(false); });
+      foot.appendChild(restart);
+    }
+  };
+  box.append(audio, text, choices, foot);
+  text.textContent = "Opening the adventure…";
+  fetch(advUrl).then((r) => r.json()).then((a) => {
+    adv = a;
+    if (!path.length || !adv.passages[path[path.length - 1]]) path = [adv.start];
+    draw(false);
+  }).catch(() => { text.textContent = "Couldn't open this adventure."; });
+  return box;
 }
 
 // ── listening: read along, chapters, speed, sleep timer, picking up where you stopped, saving for offline ──
@@ -885,11 +989,16 @@ function storyCard(s, el) {
   const wc = (s.story || "").split(/\s+/).filter(Boolean).length;
   if (wc > 50) bits.push(`${wc.toLocaleString()} words, about ${Math.max(1, Math.round(wc / 150))} min read aloud`);
   sub.textContent = bits.join(", "); el.appendChild(sub);
-  el.appendChild(mediaBlock(s));
+  if (s.adventure) {                      // choose your own adventure: played, not read straight through
+    el.appendChild(adventurePlayer(s));
+    if (s.id || s.run_id) el.appendChild(exportLinks({ ...s, id: s.id || s.run_id }));
+  } else {
+    el.appendChild(mediaBlock(s));
+  }
   if (s.note) { const n = document.createElement("p"); n.className = "note"; n.textContent = s.note; el.appendChild(n); }
   const sid = s.id || s.run_id;
-  if (sid) el.appendChild(storyTools(s, sid, el));
-  el.appendChild(renderReader(s.story || ""));
+  if (sid && !s.adventure) el.appendChild(storyTools(s, sid, el));
+  if (!s.adventure) el.appendChild(renderReader(s.story || ""));
   el.appendChild(deleteControl(s, () => {
     if ($("viewer").open) $("viewer").close();
     if (el.id === "resultView") show("stageEmpty");
@@ -1735,10 +1844,14 @@ async function loadLibrary() {
     const meta = document.createElement("div"); meta.className = "meta";
     const t = document.createElement("div"); t.className = "title"; t.textContent = s.title;
     const sm = document.createElement("div"); sm.className = "small";
-    const what = s.video ? "Video" : s.audio ? "Audio" : "Story";
+    const what = s.adventure ? "Choose your own adventure" : s.video ? "Video" : s.audio ? "Audio" : "Story";
     sm.textContent = `${what}${s.episode > 1 ? `, episode ${s.episode}` : ""}${s.level ? `, ${LEVEL_NAMES[s.level] || s.level}` : ""}${s.by ? `, by ${s.by}` : ""}`;
     meta.append(t, sm); b.appendChild(meta);
-    if (s.bedtime) { const bt = document.createElement("span"); bt.className = "badge bedtime-badge"; bt.textContent = "Bedtime"; b.appendChild(bt); }
+    if (s.bedtime || s.adventure) {
+      const bt = document.createElement("span"); bt.className = "badge bedtime-badge";
+      bt.textContent = [s.adventure ? "Adventure" : "", s.bedtime ? "Bedtime" : ""].filter(Boolean).join(", ");
+      b.appendChild(bt);
+    }
     if (s.listened > 0.02 && s.listened < 0.97) {        // how far you got
       const pr = document.createElement("div"); pr.className = "listened"; pr.title = `${Math.round(s.listened * 100)}% listened`;
       const f = document.createElement("span"); f.style.width = `${Math.round(s.listened * 100)}%`; pr.appendChild(f); b.appendChild(pr);
