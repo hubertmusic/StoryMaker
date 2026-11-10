@@ -458,3 +458,22 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .lib-tabs [role="tab"]:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .unfinished.tab-hidden { display: none; }
 .nas-shelf { margin-top: 12px; }
+
+/* the series bible */
+.bible h4 { margin: 0 0 4px; font-family: var(--serif); font-weight: 400; font-size: 1.25rem; }
+.bible h5 { margin: 18px 0 8px; font-size: 1rem; }
+.bible .bf { display: grid; gap: 4px; font-size: .9rem; }
+.bible .bf > span { color: var(--muted); }
+.bible-look { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.bible-look .bf:last-child { grid-column: 1 / -1; }
+.bible-chars { display: grid; gap: 14px; }
+.bible-char { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 14px; padding: 12px; border-radius: var(--radius-sm);
+  background: var(--shelf-2); }
+.bc-pic { width: 112px; height: 112px; border-radius: var(--radius-sm); background: var(--dusk); display: grid; place-items: center;
+  font-family: var(--serif); font-size: 2.4rem; color: var(--muted); overflow: hidden; }
+.bc-pic img { width: 100%; height: 100%; object-fit: cover; }
+.bc-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 12px; align-items: start; }
+.bc-fields .bf:has(textarea) { grid-column: 1 / -1; }
+.bc-rm { justify-self: start; align-self: end; }
+.bible-eps { margin: 0 0 12px; padding-left: 22px; display: grid; gap: 6px; font-size: .92rem; }
+@media (max-width: 560px) { .bible-char { grid-template-columns: 1fr; } .bc-pic { width: 88px; height: 88px; } }

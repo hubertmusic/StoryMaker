@@ -28,7 +28,8 @@ function formData() {
     video: $("video").value,
     writer: $("writer").value,
     portrait: $("portrait").checked,
-    pictureStyle: (document.querySelector('input[name="pictureStyle"]:checked') || {}).value,
+    // the next episode keeps its series' look unless you picked another one for it on purpose
+    pictureStyle: kind === "next" && !pictureStyleTouched ? "" : (document.querySelector('input[name="pictureStyle"]:checked') || {}).value,
     useStyle: $("useStyle").checked,
     proofread: $("proofread").checked,
     book: $("book").checked,
@@ -227,6 +228,7 @@ function updateKind() {
   $("seriesRow").hidden = !next;
   $("levelRow").hidden = next;            // a series keeps its own reading level
   $("ideaLabel").textContent = next ? "Anything that should happen this time? (optional)" : "What should the story be about?";
+  if (typeof updatePictureStyle === "function") { pictureStyleTouched = false; updatePictureStyle(); }
   $("idea").placeholder = next ? "They find a map in the attic — or leave it blank to be surprised" : "A lighthouse keeper who befriends a storm";
 }
 
@@ -615,9 +617,107 @@ function storyTools(s, id, el) {
     const base = features.studioUrl || `${location.protocol}//${location.hostname}:${location.protocol === "https:" ? 8443 : 8096}`;
     window.open(`${base.replace(/\/$/, "")}/?import=${encodeURIComponent(id)}`, "_blank", "noopener");
   }));
+  const ser = (seriesList || []).find((x) => x.name === s.series);
+  if (ser) bar.append(btn("Next episode", () => nextEpisode(ser.name)), btn("Series bible", biblePanel));
   if (s.request) bar.append(btn("Make a new version", () => newVersion(s.request)));
   if (!$("tabArchive").hidden) bar.append(btn("Move to archive", archivePanel));   // only when there's a NAS
   wrap.append(bar, area);
+
+  // the series bible: who's in it and how they look and sound, the look of every episode, and what the writer
+  // remembers (each episode's recap, where things stand, open threads)
+  async function biblePanel() {
+    area.innerHTML = '<p class="hint">Opening the series bible…</p>';
+    const b = await api(`/api/series/${ser.slug}`);
+    area.innerHTML = "";
+    if (!b.ok) { area.textContent = b.error || "Couldn't open it."; return; }
+    const p = document.createElement("div"); p.className = "panel-tool bible";
+    const h = document.createElement("h4"); h.textContent = `${b.name}: series bible`;
+    const note = document.createElement("p"); note.className = "level-note";
+    note.textContent = "Every new episode uses exactly these characters, looks and voices. Change anything here and the next episode follows it.";
+    p.append(h, note);
+    const mkField = (label, value, { area: big = false, ph = "", max = 300 } = {}) => {
+      const l = document.createElement("label"); l.className = "bf";
+      const t = document.createElement("span"); t.textContent = label;
+      const i = document.createElement(big ? "textarea" : "input"); if (!big) i.type = "text";
+      i.value = value || ""; i.placeholder = ph; i.maxLength = max; if (big) i.rows = 2;
+      l.append(t, i); return [l, i];
+    };
+    // the look
+    const lookRow = document.createElement("div"); lookRow.className = "bible-look";
+    const styleSel = document.createElement("select");
+    for (const [v, t] of [["", "Each story's own choice"], ["storybook", "Storybook"], ["realistic", "Realistic"], ["cinematic", "Cinematic"], ["3d", "3D animated"], ["epic", "Epic action"]]) styleSel.append(new Option(t, v));
+    styleSel.value = b.bible.picture_style || "";
+    const sl = document.createElement("label"); sl.className = "bf"; sl.append(Object.assign(document.createElement("span"), { textContent: "Picture style" }), styleSel);
+    const [vl, vi] = mkField("Look of every picture", b.bible.visual_style, { area: true, max: 400, ph: "e.g. lush jungle greens, golden hour light, painterly" });
+    const nl = document.createElement("div"); nl.className = "bf";
+    nl.append(Object.assign(document.createElement("span"), { textContent: "Narrator" }));
+    const narr = document.createElement("div"); nl.appendChild(narr); voicePicker(narr, { current: b.bible.narrator });
+    lookRow.append(sl, nl, vl); p.appendChild(lookRow);
+    // the characters
+    const ch = document.createElement("h5"); ch.textContent = "Characters"; p.appendChild(ch);
+    const list = document.createElement("div"); list.className = "bible-chars"; p.appendChild(list);
+    const KINDS = [["", "Kind…"], ["female", "Woman"], ["male", "Man"], ["girl", "Girl"], ["boy", "Boy"], ["old_woman", "Older woman"], ["old_man", "Older man"], ["creature", "Creature"]];
+    const rows = [];
+    const addRow = (c = {}) => {
+      const r = document.createElement("div"); r.className = "bible-char";
+      const pic = document.createElement("div"); pic.className = "bc-pic";
+      if (c.portraitUrl) { const im = document.createElement("img"); im.src = c.portraitUrl; im.alt = `Portrait of ${c.name}`; pic.appendChild(im); }
+      else pic.textContent = (c.name || "?").slice(0, 1);
+      const f = document.createElement("div"); f.className = "bc-fields";
+      const [nL, nI] = mkField("Name", c.name, { max: 60 });
+      const kL = document.createElement("label"); kL.className = "bf"; const kS = document.createElement("select");
+      for (const [v, t] of KINDS) kS.append(new Option(t, v)); kS.value = c.type || "";
+      kL.append(Object.assign(document.createElement("span"), { textContent: "Kind" }), kS);
+      const [aL, aI] = mkField("Age", c.age, { max: 20, ph: "12, 40s…" });
+      const [lL, lI] = mkField("Looks", c.look, { area: true, ph: "hair, eyes, build, skin, anything distinctive" });
+      const [oL, oI] = mkField("Usually wears", c.outfit, { max: 200 });
+      const vb = document.createElement("div"); vb.className = "bf"; vb.append(Object.assign(document.createElement("span"), { textContent: "Voice" }));
+      const vp = document.createElement("div"); vb.appendChild(vp);
+      voicePicker(vp, { gender: ["female", "girl", "old_woman"].includes(c.type) ? "female" : ["male", "boy", "old_man"].includes(c.type) ? "male" : "", current: c.voice });
+      const rm = document.createElement("button"); rm.type = "button"; rm.className = "small-btn bc-rm"; rm.textContent = "Remove";
+      rm.addEventListener("click", () => { r.remove(); rows.splice(rows.indexOf(row), 1); });
+      f.append(nL, kL, aL, oL, lL, vb, rm);
+      r.append(pic, f); list.appendChild(r);
+      const row = { get: () => ({ name: nI.value.trim(), type: kS.value, age: aI.value.trim(), look: lI.value.trim(), outfit: oI.value.trim(), voice: vp.spec ? vp.spec() : "" }) };
+      rows.push(row);
+    };
+    (b.bible.characters || []).forEach(addRow);
+    const add = document.createElement("button"); add.type = "button"; add.className = "small-btn"; add.textContent = "Add a character";
+    add.addEventListener("click", () => addRow({})); p.appendChild(add);
+    // what the writer remembers
+    const mh = document.createElement("h5"); mh.textContent = "What the writer remembers"; p.appendChild(mh);
+    const eps = document.createElement("ol"); eps.className = "bible-eps";
+    for (const e of b.episodes) { const li = document.createElement("li"); const t = document.createElement("strong"); t.textContent = e.title; li.append(t, document.createTextNode(` ${e.recap || e.logline || ""}`)); eps.appendChild(li); }
+    p.appendChild(eps);
+    const [stL, stI] = mkField("Where things stand now (one per line)", (b.state || []).join("\n"), { area: true, max: 3000 });
+    const [thL, thI] = mkField("Open threads the next episode can pick up (one per line)", (b.threads || []).join("\n"), { area: true, max: 3000 });
+    stI.rows = 4; thI.rows = 3; p.append(stL, thL);
+    // save, portraits
+    const acts = document.createElement("div"); acts.className = "cs-row";
+    const save = document.createElement("button"); save.type = "button"; save.className = "go go-small"; save.textContent = "Save the bible";
+    const draw = document.createElement("button"); draw.type = "button"; draw.className = "small-btn"; draw.textContent = "Draw the portraits";
+    const msg = document.createElement("p"); msg.className = "settings-msg";
+    acts.append(save, ...(features.localPictures ? [draw] : [])); p.append(acts, msg); area.appendChild(p);
+    const payload = () => ({ bible: { characters: rows.map((r) => r.get()).filter((c) => c.name), picture_style: styleSel.value,
+      visual_style: vi.value.trim(), narrator: narr.spec ? narr.spec() : "" },
+      state: stI.value.split("\n").map((x) => x.trim()).filter(Boolean), threads: thI.value.split("\n").map((x) => x.trim()).filter(Boolean) });
+    const doSave = async () => {
+      const r = await api(`/api/series/${ser.slug}`, payload(), "PUT");
+      msg.className = r.ok ? "settings-msg" : "settings-msg bad";
+      msg.textContent = r.ok ? "Saved. The next episode follows it." : (r.error || "Couldn't save.");
+      return r.ok;
+    };
+    save.addEventListener("click", doSave);
+    draw.addEventListener("click", async () => {
+      if (!(await doSave())) return;
+      draw.disabled = true;
+      const r = await api(`/api/series/${ser.slug}/portraits`, {});
+      if (!r.ok) { draw.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
+      const m = jobMeter(); p.insertBefore(m, msg);
+      followJob(r.job_id, m, () => { msg.className = "settings-msg"; msg.textContent = "Portraits drawn."; setTimeout(biblePanel, 800); },
+        (err) => { draw.disabled = false; msg.className = "settings-msg bad"; msg.textContent = err; }, "drawing the portraits");
+    });
+  }
 
   // this one story to the NAS archive (copied and checked before it's removed here)
   function archivePanel() {
@@ -931,7 +1031,7 @@ function storyTools(s, id, el) {
     // the look of the new pictures (starts at the story's own)
     const styleRow = document.createElement("label"); styleRow.className = "field style-pick"; styleRow.hidden = true;
     const styleSel = document.createElement("select");
-    for (const [v, t] of [["storybook", "Storybook (illustrated)"], ["realistic", "Realistic (like photographs)"], ["cinematic", "Cinematic (like a film)"], ["3d", "3D animated"]]) {
+    for (const [v, t] of [["storybook", "Storybook (illustrated)"], ["realistic", "Realistic (like photographs)"], ["cinematic", "Cinematic (like a film)"], ["3d", "3D animated"], ["epic", "Epic action"]]) {
       const o = document.createElement("option"); o.value = v; o.textContent = t; styleSel.appendChild(o);
     }
     styleSel.value = ((s.request || {}).picture_style) || "storybook";
@@ -1288,6 +1388,16 @@ async function loadLibrary() {
   }
 }
 
+// "Next episode" on a story: the make form, set to continue its series
+function nextEpisode(name) {
+  const v = document.getElementById("viewer"); if (v && v.close) v.close();
+  const r = document.querySelector('input[name="kind"][value="next"]'); r.checked = true; updateKind();
+  $("series").value = name;
+  $("idea").value = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  setTimeout(() => $("idea").focus(), 400);
+}
+
 async function loadSeries() {
   const r = await api("/api/series");
   seriesList = (r.series || []);
@@ -1332,12 +1442,16 @@ document.querySelectorAll('input[name="detail"], input[name="mode"]').forEach((r
 const PICTURE_HINTS = { storybook: "Illustrated, like a picture book.",
   realistic: "Like photographs of real people and places. Best with a realistic model in Draw Things (see the checks).",
   cinematic: "Like stills from a film: real people, dramatic light. Best with a realistic model in Draw Things.",
-  "3d": "Like a 3D animated film: rendered characters, soft light, rich colour." };
+  "3d": "Like a 3D animated film: rendered characters, soft light, rich colour.",
+  epic: "Big action moments frozen mid-strike: dramatic light, dust and sparks, heroic angles. Best for fights and battles." };
 function updatePictureStyle() {
   const mode = (document.querySelector('input[name="mode"]:checked') || {}).value;
   $("pictureStyleRow").hidden = !(mode === "video" || $("book").checked);
   const v = (document.querySelector('input[name="pictureStyle"]:checked') || {}).value || "storybook";
-  $("pictureStyleHint").textContent = PICTURE_HINTS[v];
+  const next = (document.querySelector('input[name="kind"]:checked') || {}).value === "next";
+  $("pictureStyleHint").textContent = next && !pictureStyleTouched
+    ? "The series keeps its own look (set it in the Series bible). Pick one here only to change it for this episode."
+    : PICTURE_HINTS[v];
   try { localStorage.setItem("pictureStyle", v); } catch { /* private window */ }
 }
 try {
@@ -1345,6 +1459,8 @@ try {
   const r = saved && document.querySelector(`input[name="pictureStyle"][value="${saved}"]`);
   if (r) r.checked = true;
 } catch { /* private window */ }
+var pictureStyleTouched = false;   // (var: updateKind may read it before this line runs)
+document.querySelectorAll('input[name="pictureStyle"]').forEach((r) => r.addEventListener("change", () => { pictureStyleTouched = true; }));
 document.querySelectorAll('input[name="mode"], input[name="pictureStyle"], #book').forEach((r) => r.addEventListener("change", updatePictureStyle));
 updatePictureStyle();
 

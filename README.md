@@ -881,3 +881,20 @@ everything done so far, so another story or book can go first. Resume carries on
   (with Chatterbox the line being read is dropped and read again on Resume); other steps finish the step they're
   on first. A paused book still resumes after the studio or the Mac restarts.
 
+## 25. Series: the bible, memory and Next episode
+
+- **Next episode** (on every story) opens the make form set to continue that series. Say what should happen, or
+  leave it blank to be surprised.
+- **Series bible** (on every story): the characters (name, kind, age, looks, what they usually wear, voice), the look
+  of every picture, the picture style and the narrator. Every new episode uses exactly these: the writer gets the
+  descriptions word for word, the pictures use them, and the voices follow them. Edit it any time.
+- **Portraits:** *Draw the portraits* draws each character from the bible's words, with a seed of its own, so the
+  reference looks the same every time (until you change the words). It's how you check a character looks right
+  before the next episode.
+- **What the writer remembers:** after each episode the writer notes what happened, where things stand (injuries,
+  secrets, who has what) and the open threads. The next episode is written from that, and you can edit those
+  notes in the bible to steer it.
+- **Epic action** picture style: fights and battles frozen at the decisive moment, dramatic light, dust and sparks.
+- A series keeps its own picture style from episode to episode; pick one on the form only to change it for one
+  episode.
+

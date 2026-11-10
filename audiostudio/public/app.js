@@ -873,7 +873,7 @@ function videoBlock(f) {
   const go = el("button", { type: "button", class: "small-btn", text: f.video ? "Make the pictures and video again" : "Make pictures and a video" });
   go.disabled = !f.pictures;
   const style = el("select", { "aria-label": "Picture style" },
-    ...[["storybook", "Storybook (illustrated)"], ["realistic", "Realistic (like photographs)"], ["cinematic", "Cinematic (like a film)"], ["3d", "3D animated"]]
+    ...[["storybook", "Storybook (illustrated)"], ["realistic", "Realistic (like photographs)"], ["cinematic", "Cinematic (like a film)"], ["3d", "3D animated"], ["epic", "Epic action"]]
       .map(([v, t]) => el("option", { value: v, text: t, selected: (book.pictureStyle || "storybook") === v })));
   go.addEventListener("click", async () => {
     const changed = style.value !== (book.pictureStyle || "storybook");

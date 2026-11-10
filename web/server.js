@@ -226,7 +226,7 @@ function runStorymaker(user, args, stdinText = "") {
 }
 
 // Turn the form into a safe argument list.
-const PICTURE_STYLES = ["storybook", "realistic", "cinematic", "3d"];
+const PICTURE_STYLES = ["storybook", "realistic", "cinematic", "3d", "epic"];
 function buildArgs(b) {
   const args = [];
   const pick = (v, list, def) => (list.includes(v) ? v : def);
@@ -735,6 +735,91 @@ app.get("/api/series", async (req, res) => {
 
 // A finished story's folder name: letters, numbers, dash, underscore, dot — never a hidden folder.
 const storyId = (id) => (/^[\w][\w.-]*$/.test(String(id)) && id !== "series" ? String(id) : null);
+
+// ───────────────────────────── a series' bible ─────────────────────────────
+// Its characters (name, kind, age, look, outfit, voice), look, picture style and narrator, used for every new
+// episode; plus what the writer remembers (each episode's recap, where things stand, open threads).
+const SERIES_DIR = () => path.join(OUTPUT_DIR, "series");
+const BIBLE_TYPES = ["female", "male", "girl", "boy", "old_woman", "old_man", "creature"];
+const BIBLE_STYLES = ["storybook", "realistic", "cinematic", "3d", "epic"];
+const VOICE_OK = /^[a-z]{2}_[a-z0-9]{2,20}(\^[+-]?\d{1,2})?$/;
+function seriesBySlug(u, slug) {
+  slug = String(slug || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
+  if (!slug) return null;
+  const f = path.join(SERIES_DIR(), slug, "series.json");
+  let sr;
+  try { sr = JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; }
+  if (!visibleSeries(u).has(sr.name)) return null;
+  return { slug, file: f, series: sr };
+}
+function bibleFromSeries(sr) {        // the first bible: the characters as the writer described them
+  const types = Object.fromEntries((sr.cast || []).map((c) => [String(c.name || "").toLowerCase(), c.voice]));
+  return String(sr.characters || "").split(/;\s*/).map((part) => {
+    part = part.trim();
+    if (!part) return null;
+    // the name ends at the first "(", ":", "," or spaced dash: "Mira, a curious girl…", "Tom (60s, …)"
+    const cut = part.match(/\s*(?:\(|:|,|\s[—–-]\s)\s*/);
+    const m = [null, cut ? part.slice(0, cut.index) : part, cut ? part.slice(cut.index + cut[0].length).replace(/\)\s*$/, "") : ""];
+    if (!m[1].trim()) return null;
+    let desc = (m[2] || "").trim(), age = "", outfit = "";
+    const a = desc.match(/^(\d{1,3}s?|teen|adult|elderly)\s*,\s*/i); if (a) { age = a[1]; desc = desc.slice(a[0].length); }
+    const w = desc.match(/\bwearing\s+(.+)$/i); if (w) { outfit = w[1].replace(/[ ,.]+$/, ""); desc = desc.slice(0, w.index).replace(/[ ,]+$/, ""); }
+    const name = m[1].trim().slice(0, 60);
+    return { name, type: types[name.toLowerCase()] || "", age, look: desc.slice(0, 300), outfit: outfit.slice(0, 200), voice: "" };
+  }).filter(Boolean).slice(0, 24);
+}
+app.get("/api/series/:slug", (req, res) => {
+  const hit = seriesBySlug(req.user, req.params.slug);
+  if (!hit) return res.status(404).json({ ok: false, error: "Unknown series." });
+  const sr = hit.series, bible = sr.bible || {};
+  if (!(bible.characters || []).length) bible.characters = bibleFromSeries(sr);
+  const pdir = path.join(SERIES_DIR(), hit.slug, "portraits");
+  for (const c of bible.characters) {
+    c.portraitUrl = c.portrait && fs.existsSync(path.join(pdir, c.portrait))
+      ? `/api/series/${hit.slug}/portrait/${encodeURIComponent(c.portrait)}?v=${Math.round(fs.statSync(path.join(pdir, c.portrait)).mtimeMs)}` : null;
+  }
+  res.json({ ok: true, slug: hit.slug, name: sr.name, level: sr.level || "family",
+    bible: { characters: bible.characters, visual_style: bible.visual_style || sr.visual_style || "",
+      picture_style: bible.picture_style || "", narrator: bible.narrator || "" },
+    episodes: (sr.episodes || []).filter((e) => e.complete !== false).map((e) => ({ title: e.title, logline: e.logline, recap: e.recap || "", date: e.date })),
+    state: sr.state || [], threads: sr.threads || [] });
+});
+app.put("/api/series/:slug", (req, res) => {
+  const hit = seriesBySlug(req.user, req.params.slug);
+  if (!hit) return res.status(404).json({ ok: false, error: "Unknown series." });
+  const b = req.body || {}, bb = b.bible || {};
+  const str = (x, n) => String(x == null ? "" : x).replace(/[\u0000-\u001f]/g, " ").trim().slice(0, n);
+  const old = Object.fromEntries(((hit.series.bible || {}).characters || []).map((c) => [String(c.name).toLowerCase(), c]));
+  const chars = (Array.isArray(bb.characters) ? bb.characters : []).slice(0, 24).map((c) => {
+    const name = str(c.name, 60);
+    if (!name) return null;
+    const was = old[name.toLowerCase()] || {};
+    const look = str(c.look, 300), age = str(c.age, 20), outfit = str(c.outfit, 200);
+    return { name, type: BIBLE_TYPES.includes(c.type) ? c.type : "", age, look, outfit,
+      voice: VOICE_OK.test(c.voice || "") ? c.voice : "",
+      // a portrait only stays while the words it was drawn from are the same
+      ...(was.portrait && was.look === look && was.age === age && was.outfit === outfit ? { portrait: was.portrait } : {}) };
+  }).filter(Boolean);
+  const sr = hit.series;
+  sr.bible = { characters: chars, visual_style: str(bb.visual_style, 400),
+    picture_style: BIBLE_STYLES.includes(bb.picture_style) ? bb.picture_style : "",
+    narrator: VOICE_OK.test(bb.narrator || "") ? bb.narrator : "" };
+  if (Array.isArray(b.state)) sr.state = b.state.map((x) => str(x, 240)).filter(Boolean).slice(0, 12);
+  if (Array.isArray(b.threads)) sr.threads = b.threads.map((x) => str(x, 240)).filter(Boolean).slice(0, 12);
+  fs.writeFileSync(hit.file, JSON.stringify(sr, null, 2));
+  res.json({ ok: true });
+});
+app.post("/api/series/:slug/portraits", async (req, res) => {
+  const hit = seriesBySlug(req.user, req.params.slug);
+  if (!hit) return res.status(404).json({ ok: false, error: "Unknown series." });
+  res.json(startJob(req, "portraits", null, await runStorymaker(req.user, ["--draw-portraits", hit.slug, "--background"])));
+});
+app.get("/api/series/:slug/portrait/:file", (req, res) => {
+  const hit = seriesBySlug(req.user, req.params.slug);
+  const file = String(req.params.file || "");
+  if (!hit || !/^[a-z0-9-]+\.png$/.test(file)) return res.status(404).end();
+  res.sendFile(path.join(SERIES_DIR(), hit.slug, "portraits", file));
+});
 function guard(req, res) {
   const id = storyId(req.params.id);
   if (!id || !canSee(req.user, id)) { res.status(404).json({ ok: false, error: "Unknown story" }); return null; }

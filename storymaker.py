@@ -468,9 +468,153 @@ Recurring characters: {characters}
 Who they are (fixed, use exactly these in "cast"): {cast}
 The story so far:
 {previously}
-Write a NEW adventure that follows on from the last episode (don't retell or repeat earlier plots).
+Write a NEW adventure that follows on from the last episode (don't retell or repeat earlier plots). Respect
+everything that's true now (injuries, secrets, who has what, how people feel about each other), and you may pick
+up one or two of the open threads.
 You may add new characters; keep the recurring ones in "characters" and "cast" unchanged.
 """
+
+RECAP_PROMPT = """You keep the continuity notes for a story series. Read this episode and reply with JSON only:
+{{"recap": "5 to 8 sentences: what happened in this episode, in order, naming who did what, and how it ended",
+ "where_things_stand": ["short facts that are true at the end and will matter later: injuries, who knows what,
+   relationships and feelings, where people are, important objects and who has them"],
+ "open_threads": ["unresolved questions, promises, dangers or mysteries a next episode could pick up"]}}
+Up to 8 items in each list. Earlier facts that are still true (keep them unless this episode changed them):
+{state}
+
+Episode "{title}":
+{text}"""
+
+
+def bible_of(series):
+    """A series' bible: its characters (name, type, age, look, outfit, voice), look, picture style and narrator."""
+    return (series or {}).get("bible") or {}
+
+
+def bible_characters(series):
+    """The bible's characters as the writer and the picture app read them: "Mara (12, red curls, wearing …)"."""
+    out = []
+    for c in bible_of(series).get("characters") or []:
+        if not c.get("name"):
+            continue
+        bits = [x for x in (c.get("age"), c.get("look"), f"wearing {c['outfit']}" if c.get("outfit") else "") if x]
+        out.append(f"{c['name']} ({', '.join(bits)})" if bits else c["name"])
+    return "; ".join(out)
+
+
+def bible_cast(series):
+    return [{"name": c["name"], "voice": c["type"], "confirmed": True}
+            for c in bible_of(series).get("characters") or [] if c.get("name") and c.get("type") in VOICE_TYPES]
+
+
+def bible_from_story(story):
+    """A first bible from what the writer wrote: "Mara (12, red curls, freckles)" → name, age, look; the type from
+    the cast."""
+    types = {str(c.get("name", "")).lower(): c.get("voice") for c in story.get("cast") or [] if isinstance(c, dict)}
+    out = []
+    for part in re.split(r";\s*", story.get("characters", "") or ""):
+        part = part.strip()
+        if not part:
+            continue
+        # the name ends at the first "(", ":", "," or spaced dash: "Mira, a curious girl…", "Tom (60s, …)"
+        cut = re.search(r"\s*(?:\(|:|,|\s[—–-]\s)\s*", part)
+        name = (part[:cut.start()] if cut else part).strip()[:60]
+        desc = (part[cut.end():] if cut else "").strip().rstrip(")").strip()
+        if not name:
+            continue
+        age = ""
+        a = re.match(r"(\d{1,3}s?|teen|adult|elderly)\s*,\s*", desc, re.I)
+        if a:
+            age, desc = a.group(1), desc[a.end():]
+        outfit = ""
+        w = re.search(r"\bwearing\s+(.+)$", desc, re.I)
+        if w:
+            outfit, desc = w.group(1).strip(" ,."), desc[:w.start()].strip(" ,")
+        out.append({"name": name, "type": types.get(name.lower(), ""), "age": age[:20], "look": desc[:300],
+                    "outfit": outfit[:200], "voice": ""})
+    return out[:24]
+
+
+def portrait_prompt(series, c):
+    ps = PICTURE_STYLES[picture_style({"picture_style": bible_of(series).get("picture_style")})]
+    look = (bible_of(series).get("visual_style") or series.get("visual_style") or "") if ps["keep_writer_look"] \
+        else ps["look"]
+    bits = ", ".join(x for x in (c.get("age"), c.get("look"), f"wearing {c['outfit']}" if c.get("outfit") else "") if x)
+    return (f"Character portrait of {c['name']}{': ' + bits if bits else ''}. Head and shoulders, facing the viewer, "
+            f"a calm natural expression, plain soft background. {look}.")
+
+
+def draw_portraits(cfg, slug, report_=lambda f, t: None):
+    """A portrait for every character in a series' bible, from exactly the bible's words: the reference for how
+    each one looks. Each character keeps its own seed, so redrawing gives the same face unless the words change."""
+    f = series_root(cfg) / slug / "series.json"
+    if not f.exists():
+        raise ValueError("Unknown series.")
+    series = json.loads(f.read_text())
+    if not local_image_ready(cfg):
+        raise RuntimeError("Portraits need Draw Things: it isn't answering. " + DRAW_THINGS_FIX)
+    chars = [c for c in bible_of(series).get("characters") or [] if c.get("name")]
+    pdir = f.parent / "portraits"
+    pdir.mkdir(exist_ok=True)
+    level = series.get("level") or "family"
+    size = picture_size(cfg, square=True)
+    for i, c in enumerate(chars):
+        report_(i / max(1, len(chars)), f"Drawing {c['name']} ({i + 1} of {len(chars)})")
+        prompt = portrait_prompt(series, c)
+        if level in ("mature", "explicit"):
+            prompt = picture_safe(prompt, level)
+        seed = int(hashlib.sha1(f"{slug}|{c['name'].lower()}".encode()).hexdigest()[:8], 16)
+        name = f"{slugify(c['name']) or 'character'}.png"
+        local_image(cfg, prompt, size[0], size[1], pdir / name, level, seed,
+                    style=picture_style({"picture_style": bible_of(series).get("picture_style")}))
+        c["portrait"] = name
+        series = {**json.loads(f.read_text()), "bible": {**bible_of(series), "characters": chars}}
+        f.write_text(json.dumps(series, indent=2))           # saved after each, so a stop keeps what's drawn
+    report_(1, "Portraits drawn")
+    return {"drawn": len(chars)}
+
+
+def last_episode_style(series):
+    """The picture style the last episode was drawn in, so a series keeps its look even without a bible choice."""
+    for e in reversed(done_episodes(series)):
+        try:
+            return json.loads((Path(e["folder"]) / "story.json").read_text()).get("picture_style")
+        except (OSError, ValueError, KeyError):
+            continue
+    return None
+
+
+def series_memory(series):
+    """What the writer is told about earlier episodes: the last three in detail, older ones in a line, then what's
+    true now and the open threads."""
+    eps = done_episodes(series)
+    lines = []
+    for i, e in enumerate(eps):
+        told = e.get("recap") if i >= len(eps) - 3 and e.get("recap") else e.get("logline", "")
+        lines.append(f"- Episode {i + 1}: {e.get('title', '')} — {told}")
+    out = "\n".join(lines) or "(no earlier episodes)"
+    if series.get("state"):
+        out += "\nWhere things stand now:\n" + "\n".join(f"- {x}" for x in series["state"])
+    if series.get("threads"):
+        out += "\nOpen threads (pick up one or two, not all):\n" + "\n".join(f"- {x}" for x in series["threads"])
+    return out
+
+
+def episode_recap(cfg, story, series=None):
+    """The continuity notes for a finished episode (None if the writer couldn't make them: that's not fatal)."""
+    text = "\n\n".join(str(sc.get("narration", "")) for sc in story.get("scenes", []))
+    if len(text) > 14000:                      # the start and (especially) the end matter most
+        text = text[:4000] + "\n…\n" + text[-10000:]
+    try:
+        r = ask_writer(cfg, RECAP_PROMPT.format(title=story.get("title", ""), text=text,
+                                                state="\n".join(f"- {x}" for x in (series or {}).get("state") or [])
+                                                or "(none yet)"), think="fix")
+    except Exception as e:
+        log(f"Couldn't write this episode's continuity notes ({str(e)[:120]}); the next episode gets its summary.")
+        return None
+    clean = lambda xs: [str(x).strip()[:240] for x in (xs or []) if str(x).strip()][:8]
+    return {"recap": str(r.get("recap") or "").strip()[:1500], "state": clean(r.get("where_things_stand")),
+            "threads": clean(r.get("open_threads"))}
 
 
 def extract_json(text):
@@ -1292,12 +1436,14 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
         lo, hi = int(lo * length), int(hi * length)
     series_text = ""
     if series:
-        prev = "\n".join(f"- Episode {i + 1}: {e['title']} — {e['logline']}" for i, e in enumerate(done_episodes(series)))
+        bible = bible_of(series)
+        locked = bible_cast(series) or series.get("cast") or []
         fixed = ", ".join(f"{c['name']} ({TYPE_WORDS.get(c.get('voice'), c.get('voice', ''))})"
-                          for c in series.get("cast") or [] if c.get("name")) or "as before"
+                          for c in locked if c.get("name")) or "as before"
         series_text = SERIES_BLOCK.format(n=len(done_episodes(series)) + 1, name=series["name"],
-                                          style=series["visual_style"], characters=series["characters"],
-                                          previously=prev, cast=fixed)
+                                          style=bible.get("visual_style") or series["visual_style"],
+                                          characters=bible_characters(series) or series["characters"],
+                                          previously=series_memory(series), cast=fixed)
     kws = cfg.get("_KEYWORDS") or []
     prompt = STORY_PROMPT.format(
         idea=idea or "Continue the story with a fresh new adventure.", genre=genre, audience=audience,
@@ -1323,14 +1469,18 @@ def write_story(cfg, idea, genre, level, scenes, clip_mode, series=None, chapter
     if not story.get("scenes"):
         raise ValueError("The AI reply had no scenes.")
     if series:                                  # the look must not drift between episodes
-        story["visual_style"] = series["visual_style"]
-        if series["characters"] and series["characters"][:40] not in story.get("characters", ""):
-            story["characters"] = series["characters"] + "; " + story.get("characters", "")
+        story["visual_style"] = bible_of(series).get("visual_style") or series["visual_style"]
+        recurring = bible_characters(series) or series["characters"]
+        if recurring:                           # the bible's exact descriptions first, then anyone new
+            known = {re.split(r"[(:,]", c)[0].strip().lower() for c in re.split(r";\s*", recurring) if c.strip()}
+            new_ones = [c for c in re.split(r";\s*", story.get("characters", "") or "")
+                        if c.strip() and re.split(r"[(:,]", c)[0].strip().lower() not in known]
+            story["characters"] = "; ".join([recurring] + new_ones)
     quote_dialogue(story)
     declared = {str(c.get("name", "")).lower() for c in story.get("cast") or [] if isinstance(c, dict)
                 and c.get("voice") in VOICE_TYPES}
     if series:
-        apply_locked_cast(story, series.get("cast"))
+        apply_locked_cast(story, bible_cast(series) or series.get("cast"))
     complete_cast(story)
     if level == "explicit":
         for sc in story.get("scenes", []):
@@ -2227,6 +2377,15 @@ PICTURE_STYLES = {
                  "subsurface scattering, rich colour, detailed textures, high-end 3D render, depth of field"),
         "neg": ("photograph, photorealistic, real people, flat 2d, sketch, line art, watercolor, painting, anime, "
                 "low poly, plastic toy, uncanny"),
+        "keep_writer_look": False},
+    "epic": {
+        "name": "Epic action",
+        "shot": ("the decisive instant of the action, frozen in dramatic slow motion: full figures mid-strike, mid-leap "
+                 "or mid-clash, raw effort and emotion on their faces, a heroic low camera angle"),
+        "look": ("epic action film still, high contrast, intense rim lighting, dust, sparks and debris in the air, "
+                 "motion blur on the fastest movement, bold colour grade, dramatic sky, highly detailed"),
+        "neg": ("cartoon, flat 2d, sketch, line art, watercolor, painting, anime, calm pose, standing still, "
+                "plastic skin, doll, toy, gore, dismemberment"),
         "keep_writer_look": False},
     "cinematic": {
         "name": "Cinematic",
@@ -4955,13 +5114,13 @@ def list_series(cfg):
     out = []
     for f in sorted(series_root(cfg).glob("*/series.json")):
         s_ = json.loads(f.read_text())
-        out.append({"name": s_["name"], "episodes": len(s_["episodes"]), "level": s_.get("level", ""),
+        out.append({"name": s_["name"], "slug": f.parent.name, "episodes": len(s_["episodes"]), "level": s_.get("level", ""),
                     "last": s_["episodes"][-1]["title"] if s_["episodes"] else ""})
     return out
 
 
 def save_episode(cfg, series, story, result, voices, out_dir, level, genre, new_name=None,
-                 job_id="", complete=True):
+                 job_id="", complete=True, recap=None):
     root = series_root(cfg)
     if series is None:
         name = new_name or story["title"]
@@ -4977,7 +5136,14 @@ def save_episode(cfg, series, story, result, voices, out_dir, level, genre, new_
     series["episodes"] = [e for e in series["episodes"] if not job_id or e.get("job_id") != job_id]
     series["episodes"].append({"title": story["title"], "logline": story.get("logline", ""),
                                "folder": str(out_dir), "date": f"{dt.date.today()}",
-                               "job_id": job_id, "complete": complete})
+                               "job_id": job_id, "complete": complete,
+                               **({"recap": recap["recap"]} if recap and recap.get("recap") else {})})
+    if recap:                                  # what's true now, and what's still open, for the next episode
+        if recap.get("state"):
+            series["state"] = recap["state"]
+        series["threads"] = recap.get("threads") or series.get("threads") or []
+    if not series.get("bible", {}).get("characters"):     # a bible to start from: the characters as written
+        series.setdefault("bible", {})["characters"] = bible_from_story(story)
     sdir = root / series["slug"]
     sdir.mkdir(parents=True, exist_ok=True)
     ref = out_dir / "character_ref.png"
@@ -5829,7 +5995,13 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
         apply_media_style(cfg, story)
         if args.narrator and VOICE_SPEC.match(args.narrator):
             story["voice_choice"] = {"narrator": args.narrator, "characters": {}}
-        story["picture_style"] = picture_style({"picture_style": args.picture_style or cfg.get("PICTURE_STYLE")})
+        bible = bible_of(series)
+        story["picture_style"] = picture_style({"picture_style": args.picture_style or bible.get("picture_style")
+                                                or last_episode_style(series) or cfg.get("PICTURE_STYLE")})
+        if not args.narrator and (bible.get("narrator") or any(c.get("voice") for c in bible.get("characters") or [])):
+            story["voice_choice"] = {"narrator": bible.get("narrator") or "",
+                                     "characters": {c["name"]: c["voice"] for c in bible.get("characters") or []
+                                                    if c.get("name") and c.get("voice")}}
         story_file.write_text(json.dumps(story, indent=2))
     if args.picture_style:                      # (carrying on: a style chosen now wins)
         story["picture_style"] = picture_style({"picture_style": args.picture_style})
@@ -5959,8 +6131,9 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
                 shutil.copy(src, pub / src.name)
                 result[key.replace("_file", "_url")] = f"{base}/{src.name}"
 
+    recap = episode_recap(cfg, story, series) if complete else None
     saved = save_episode(cfg, series, story, result, voices, out_dir, level, args.genre, args.series,
-                         job_id, complete)
+                         job_id, complete, recap)
     result.update(series=saved["name"], episode=episode, mode=args.mode,
                   created=dt.datetime.now().isoformat(timespec="seconds"), run_id=run_id)
     (out_dir / "result.json").write_text(json.dumps(result, indent=2))
@@ -6075,6 +6248,7 @@ def main():
     ap.add_argument("--revoice", action="store_true", help="with --remaster: choose the character voices again")
     ap.add_argument("--redesign", action="store_true", help="with --remaster: choose the sounds again")
     ap.add_argument("--redraw", action="store_true", help="with --remaster: draw new pictures for the video and book")
+    ap.add_argument("--draw-portraits", metavar="SERIES_SLUG", help="draw a portrait for every character in a series' bible")
     ap.add_argument("--picture-style", choices=sorted(PICTURE_STYLES),
                     help="how the pictures look: storybook, realistic or cinematic (default: PICTURE_STYLE setting)")
     ap.add_argument("--skip-checks", dest="skip_checks", action="store_true",
@@ -6155,6 +6329,33 @@ def main():
             except Exception as e:
                 out.append({"run_id": x, "error": str(e)[:200]})
         print(json.dumps({"ok": True, "stories": out}))
+        return
+    if args.draw_portraits:
+        slug = re.sub(r"[^a-z0-9-]", "", args.draw_portraits.lower())
+        job_id = args.job_id or hashlib.sha1(f"portraits|{slug}|{time.time()}".encode()).hexdigest()[:12]
+        if args.background and not args.child:
+            logf = jobs_dir(cfg) / f"{job_id}.log"
+            argv = [a for a in sys.argv[1:] if a != "--background"]
+            cmd = [sys.executable, str(Path(__file__).resolve()), *argv, "--job-id", job_id, "--child"]
+            with open(logf, "a") as lf:
+                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=lf, stderr=lf,
+                                        start_new_session=True, close_fds=True)
+            write_status(cfg, job_id, state="queued", pid=proc.pid, kind="portraits", story=slug)
+            print(json.dumps({"ok": True, "queued": True, "job_id": job_id}))
+            return
+        def rep(frac, text):
+            write_status(cfg, job_id, state="running", kind="portraits", story=slug, progress=round(100 * frac),
+                         detail=text)
+        try:
+            out = draw_portraits(cfg, slug, rep)
+            write_status(cfg, job_id, state="done", kind="portraits", story=slug, progress=100, detail="Done",
+                         result=out)
+            print(json.dumps({"ok": True, **out}))
+        except JobStopped:
+            write_status(cfg, job_id, state="stopped", kind="portraits", story=slug, detail="Stopped.")
+        except Exception as e:
+            write_status(cfg, job_id, state="failed", kind="portraits", story=slug, error=str(e)[:300])
+            print(json.dumps({"ok": False, "error": str(e)[:300]}))
         return
     if args.cleanup:
         ids = [x for x in args.cleanup.split(",") if x.strip()]
