@@ -1,9 +1,9 @@
 // StoryMaker's offline helper. It never serves an old copy of the app while you're online: every page, script
 // and list comes from the server first, and the copy kept here is only used when there's no connection.
 // Stories you choose "Save for offline" for are kept here until you remove them, and play from here.
-const SHELL = "storymaker-shell-v1";
+const SHELL = "storymaker-shell-v2";
 const OFFLINE = "storymaker-offline-v1";       // the same name the page uses for saved stories
-const SHELL_FILES = /^\/(|index\.html|app\.js|style\.css|manifest\.webmanifest|icon-\d+\.png|fonts\/[\w.-]+)$/;
+const SHELL_FILES = /^\/(|index\.html|app\.js|style\.css|status\.html|status\.js|manifest\.webmanifest|icon-\d+\.png|fonts\/[\w.-]+)$/;
 const SHELL_API = /^\/api\/(stories|me|features|series)$/;
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -27,13 +27,14 @@ self.addEventListener("fetch", (e) => {
 });
 
 async function networkFirst(req, url) {
-  const key = req.mode === "navigate" ? "/" : url.pathname;
+  const key = url.pathname === "/index.html" ? "/" : url.pathname;
   try {
     const res = await fetch(req);
     if (res.ok && !res.redirected) (await caches.open(SHELL)).put(key, res.clone()).catch(() => {});
     return res;
   } catch (err) {
-    const hit = (await (await caches.open(SHELL)).match(key)) || (await caches.match(url.pathname));
+    const shell = await caches.open(SHELL);
+    const hit = (await shell.match(key)) || (req.mode === "navigate" && (await shell.match("/")));
     if (hit) return hit;
     if (SHELL_API.test(url.pathname)) {
       return new Response(JSON.stringify({ ok: false, offline: true, error: "You're offline." }),

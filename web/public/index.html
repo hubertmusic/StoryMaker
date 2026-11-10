@@ -19,6 +19,7 @@
   <nav>
     <a href="#make">Make a story</a>
     <a href="#library">Library</a>
+    <a href="status.html">Status</a>
     <span class="who" id="whoAmI"></span>
     <button type="button" class="quiet signout" id="signOut">Sign out</button>
     <button type="button" class="quiet style-btn" id="styleBtn">Style</button>
@@ -224,8 +225,10 @@
         <ul class="checks" id="checks" aria-label="Ready to go?"></ul>
         <div class="actions">
           <button class="go" id="makeBtn">Make it</button>
+          <button class="small-btn" id="tonightBtn" type="button" title="Waits until the night hours, then it's made while you sleep">Make it tonight</button>
           <button class="quiet" id="changeBtn" type="button">Change something</button>
         </div>
+        <p class="settings-msg" id="tonightMsg" role="status"></p>
       </div>
 
       <div id="progressView" hidden>
@@ -278,6 +281,11 @@
     <div class="cleanup-all" id="cleanupAll" hidden></div>
     <div class="cleanup-all nas-panel" id="nasPanel" hidden></div>
     <div class="cleanup-all feed-panel" id="feedPanel" hidden></div>
+    <div class="cleanup-all queue-panel" id="queuePanel" hidden>
+      <h3>Tonight</h3>
+      <p class="hint" id="queueHint"></p>
+      <div id="queueList"></div>
+    </div>
     <div class="unfinished" id="unfinished" hidden>
       <h3>Unfinished</h3>
       <p class="hint">Stories that stopped before the end. What's already written is kept. <strong>Recover</strong> finishes it from where it stopped. Stories cut off by a restart carry on by themselves.</p>
@@ -327,6 +335,12 @@
         <button class="go" type="submit" id="settingsSave">Save my account</button>
       </div>
     </form>
+
+    <section class="notify-block" id="notifyBlock">
+      <h4>Phone notifications</h4>
+      <p class="level-note">A message on your phone when a story is ready, or if one stops with a problem. It uses the free ntfy app.</p>
+      <div id="notifyBody"></div>
+    </section>
 
     <section id="peopleBlock" hidden>
       <h4>People</h4>

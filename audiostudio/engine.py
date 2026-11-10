@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "3.3 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "3.4 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -104,6 +104,39 @@ def studio_dir(cfg):
 
 def log(msg):
     print(f"[studio {time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+
+
+# ───────────────────────────── phone notifications ─────────────────────────────
+# StoryMaker hands over where to send them (the owner's ntfy topic), so they're set up in one place.
+
+def notify_settings(cfg):
+    try:
+        return json.loads((studio_dir(cfg) / "notify.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_notify_settings(cfg, url, topic):
+    f = studio_dir(cfg) / "notify.json"
+    if topic:
+        f.write_text(json.dumps({"url": (url or "https://ntfy.sh").rstrip("/"), "topic": topic}))
+        os.chmod(f, 0o600)
+    else:
+        f.unlink(missing_ok=True)
+
+
+def notify_phone(cfg, title, message, tags="books"):
+    """Send a notification to your phone (ntfy). Never holds anything up, and never fails a job."""
+    n = notify_settings(cfg)
+    if not n.get("topic"):
+        return
+    def send():
+        try:                                   # ntfy's JSON form: any characters in the title are fine
+            requests.post(n.get("url") or "https://ntfy.sh", timeout=15, json={
+                "topic": n["topic"], "title": title[:120], "message": message[:1000], "tags": [tags]}).raise_for_status()
+        except Exception as e:
+            log(f"Couldn't send the phone notification ({e}).")
+    threading.Thread(target=send, daemon=True).start()
 
 
 # ───────────────────────────── projects ─────────────────────────────
@@ -1594,7 +1627,15 @@ class Worker:
                     continue
                 write_status(d, state="failed", error=str(e)[:400],
                              detail="Something went wrong. Start again to carry on where it left off.")
+                notify_phone(self.cfg, "Audio Studio: something went wrong",
+                             f"{self._title(pid)}: {str(e)[:200]}", "warning")
                 break
+
+    def _title(self, pid):
+        try:
+            return load_project(self.cfg, pid)[1].get("title") or pid
+        except Exception:
+            return pid
 
     def _stopped(self, d, pid, kind, kw):
         if self.pause_flags.pop(pid, None):
@@ -1632,6 +1673,9 @@ class Worker:
             else:
                 run_record(self.cfg, pid, lambda f, t, **x: progress(0.15 + f * 0.85, t, **x))
         write_status(d, state="done", progress=100, detail="Finished")
+        if kind in ("all", "record", "video"):
+            what = {"all": "The audiobook is ready", "record": "The recording is done", "video": "The video is ready"}[kind]
+            notify_phone(self.cfg, f"Audio Studio: {self._title(pid)}", f"{what}.", "headphones")
 
 
 class StopJob(Exception):

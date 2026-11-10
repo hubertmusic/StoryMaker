@@ -471,6 +471,46 @@ def helper_nas_task(tid: str, x_helper_token: str = Header("")):
     return {"ok": True, **t}
 
 
+# ───────────────────────── for StoryMaker's status page and notifications ─────────────────────────
+
+@app.get("/api/helper/status")
+def helper_status(x_helper_token: str = Header("")):
+    """What the studio is doing, for StoryMaker's status page."""
+    helper_ok(x_helper_token)
+    cur = None
+    if worker.current:
+        try:
+            d = E.project_dir(cfg, worker.current)
+            st = E.read_status(d)
+            cur = {"title": worker._title(worker.current), "job": st.get("job"), "progress": st.get("progress", 0),
+                   "detail": st.get("detail", "")}
+        except Exception:
+            cur = {"title": worker.current}
+    waiting = [worker._title(j[0]) for j in list(worker.queue)]
+    try:
+        dt = DT.status(cfg)
+    except Exception as e:
+        dt = {"up": False, "detail": str(e)[:200]}
+    return {"ok": True, "version": E.STUDIO_VERSION, "current": cur, "waiting": waiting, "drawthings": dt,
+            "notify": bool(E.notify_settings(cfg).get("topic"))}
+
+
+@app.post("/api/helper/notify")
+def helper_notify(body: dict = Body(...), x_helper_token: str = Header("")):
+    """StoryMaker hands over the owner's phone-notification settings ({url, topic}; no topic turns them off)."""
+    helper_ok(x_helper_token)
+    topic = str(body.get("topic") or "")
+    if topic and not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", topic):
+        raise HTTPException(400, "That isn't a notification topic.")
+    url = str(body.get("url") or "https://ntfy.sh")
+    if not re.match(r"^https?://[^\s/]+(/[^\s]*)?$", url):
+        raise HTTPException(400, "That isn't a web address.")
+    E.save_notify_settings(cfg, url, topic)
+    if body.get("test") and topic:
+        E.notify_phone(cfg, "Audio Studio", "Notifications from Audio Studio are on too.", "headphones")
+    return {"ok": True}
+
+
 @app.get("/api/nas")
 def nas_books(user=Depends(current_user)):
     """The studio's books on the NAS that you may see, and the NAS's state."""

@@ -29,6 +29,9 @@ function envFileValue(key) {
     return val;
   } catch { return ""; }
 }
+// Your time zone (TZ= in storymaker.env), so "tonight" and the times on the page are yours, not the server's.
+if (!process.env.TZ && envFileValue("TZ")) process.env.TZ = envFileValue("TZ");
+const STARTED = Date.now();
 const APP_USER = process.env.APP_USER || envFileValue("APP_USER") || "story";
 const APP_PASSWORD = process.env.APP_PASSWORD || envFileValue("APP_PASSWORD") || "";
 
@@ -68,7 +71,16 @@ db.exec(`
     dur REAL NOT NULL DEFAULT 0, updated INTEGER NOT NULL, PRIMARY KEY (user_id, story_id));
   CREATE TABLE IF NOT EXISTS feeds (user_id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE,
     explicit INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL DEFAULT (datetime('now')));
+  CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, body TEXT NOT NULL, title TEXT,
+    created INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'waiting', job_id TEXT, error TEXT, started INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0, next_try INTEGER NOT NULL DEFAULT 0, pos REAL NOT NULL DEFAULT 0);
 `);
+try { db.exec("ALTER TABLE users ADD COLUMN ntfy_topic TEXT"); } catch { /* already there */ }
+try {   // jobs from before notifications existed are counted as told about, so turning them on doesn't flood the phone
+  db.exec("ALTER TABLE jobs ADD COLUMN notified INTEGER NOT NULL DEFAULT 0");
+  db.exec("UPDATE jobs SET notified = 1");
+} catch { /* already there */ }
+try { db.exec("ALTER TABLE jobs ADD COLUMN from_queue INTEGER NOT NULL DEFAULT 0"); } catch { /* already there */ }
 const CUT_OFF = [];   // stories a restart cut off: they're picked up again by themselves once StoryMaker is ready
 // StoryMaker just started, so nothing is being made yet: work that was cut off by a restart or an update shows
 // as stopped (and Make it again carries on from where it was), not as running forever.
@@ -277,7 +289,7 @@ const OPEN = /^\/(login\.html|login\.js|style\.css|fonts\/[\w.-]+|manifest\.webm
 app.use((req, res, next) => {
   if (OPEN.test(req.path)) return next();
   req.user = currentUser(req);
-  if (req.user) return next();
+  if (req.user) { if (req.path === "/" || req.path === "/api/me") lastBase = publicBase(req); return next(); }
   if (req.path.startsWith("/api/") || req.path.startsWith("/media/")) return res.status(401).json({ ok: false, error: "Please sign in." });
   res.redirect("/login.html");
 });
@@ -389,18 +401,211 @@ app.post("/api/estimate", async (req, res) => {
   res.json(await runStorymaker(req.user, [...buildArgs(req.body), "--estimate"], idea(req.body)));
 });
 
-app.post("/api/make", async (req, res) => {
-  const e = levelError(req.user, req.body);
-  if (e) return res.json({ ok: false, error: e });
-  if (!req.body.series && !idea(req.body).trim()) return res.json({ ok: false, error: "Type what the story should be about first." });
-  const r = await runStorymaker(req.user, [...buildArgs(req.body), "--yes", "--background"], idea(req.body));
+async function startMake(user, body, fromQueue = false) {
+  const e = levelError(user, body);
+  if (e) return { ok: false, error: e };
+  if (!body.series && !idea(body).trim()) return { ok: false, error: "Type what the story should be about first." };
+  const r = await runStorymaker(user, [...buildArgs(body), "--yes", "--background"], idea(body));
   if (r.ok && r.job_id) {
     // everything needed to carry on later from any device, if it's ever cut off
-    const info = JSON.stringify({ mode: req.body.mode || "story", book: !!req.body.book, idea: idea(req.body).slice(0, 140),
-      body: req.body });
-    db.prepare("INSERT OR REPLACE INTO jobs (id, user_id, kind, info) VALUES (?, ?, 'make', ?)").run(r.job_id, req.user.id, info);
+    const info = JSON.stringify({ mode: body.mode || "story", book: !!body.book, idea: idea(body).slice(0, 140), body });
+    db.prepare("INSERT OR REPLACE INTO jobs (id, user_id, kind, info, from_queue) VALUES (?, ?, 'make', ?, ?)")
+      .run(r.job_id, user.id, info, fromQueue ? 1 : 0);
   }
-  res.json(r);
+  return r;
+}
+app.post("/api/make", async (req, res) => res.json(await startMake(req.user, req.body || {})));
+
+// ───────────────────────────── the overnight queue ─────────────────────────────
+// Stories added for tonight wait until the night hours (QUEUE_START to QUEUE_END in storymaker.env, 11pm to 6:30am
+// unless you change them), then they're made one after another while the Mac is free.
+const hm = (v, d) => { const m = String(v || d).match(/^(\d{1,2}):(\d{2})$/); return m ? +m[1] * 60 + +m[2] : hm(d, d); };
+function nightWindow() {
+  return { start: hm(envFileValue("QUEUE_START"), "23:00"), end: hm(envFileValue("QUEUE_END"), "06:30") };
+}
+function inNight(d = new Date()) {
+  const { start, end } = nightWindow(), t = d.getHours() * 60 + d.getMinutes();
+  return start <= end ? t >= start && t < end : t >= start || t < end;
+}
+function nextNight(d = new Date()) {     // when tonight's run begins (now, if it's already night)
+  if (inNight(d)) return d;
+  const { start } = nightWindow(), n = new Date(d);
+  n.setHours(Math.floor(start / 60), start % 60, 0, 0);
+  if (n <= d) n.setDate(n.getDate() + 1);
+  return n;
+}
+const fmtHm = (mins) => { const h = Math.floor(mins / 60), m = mins % 60; return `${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "am" : "pm"}`; };
+function busyJobs() {        // anything being made right now (by anyone)
+  const out = [];
+  let names = [];
+  try { names = fs.readdirSync(JOBS_DIR).filter((n) => n.endsWith(".status.json")); } catch { /* none */ }
+  for (const n of names) {
+    const f = path.join(JOBS_DIR, n);
+    try {
+      if (Date.now() - fs.statSync(f).mtimeMs > 60 * 60 * 1000) continue;
+      const st = JSON.parse(fs.readFileSync(f, "utf8"));
+      if (st.state === "running" || st.state === "queued") out.push({ id: n.replace(".status.json", ""), st });
+    } catch { /* being written */ }
+  }
+  return out;
+}
+function queueRow(q, u) {
+  let b = {};
+  try { b = JSON.parse(q.body); } catch { /* bad row */ }
+  return { id: q.id, title: q.title, state: q.state, error: q.error, jobId: q.job_id, attempts: q.attempts,
+    mode: b.mode || "video", level: b.level || "", series: b.series || "", chapters: parseInt(b.chapters, 10) || 1,
+    bedtime: !!b.bedtime, created: q.created, started: q.started,
+    by: u && u.role === "owner" && q.user_id !== u.id ? (db.prepare("SELECT username FROM users WHERE id = ?").get(q.user_id) || {}).username : null };
+}
+app.get("/api/queue", (req, res) => {
+  const mine = req.user.role === "owner" ? "" : " AND user_id = ?";
+  const rows = db.prepare(`SELECT * FROM queue WHERE (state = 'waiting' OR (state IN ('started', 'failed') AND created > ?))${mine} ORDER BY state = 'waiting' DESC, pos, id`)
+    .all(...[Date.now() - 2 * 864e5, ...(mine ? [req.user.id] : [])]);
+  const w = nightWindow();
+  res.json({ ok: true, items: rows.map((q) => queueRow(q, req.user)), night: inNight(), from: fmtHm(w.start), to: fmtHm(w.end),
+    next: nextNight().toISOString() });
+});
+app.post("/api/queue", (req, res) => {
+  const b = req.body || {};
+  const e = levelError(req.user, b);
+  if (e) return res.json({ ok: false, error: e });
+  if (!b.series && !idea(b).trim()) return res.json({ ok: false, error: "Type what the story should be about first." });
+  const n = db.prepare("SELECT COUNT(*) AS n FROM queue WHERE state = 'waiting'").get().n;
+  if (n >= 20) return res.json({ ok: false, error: "Tonight's list is full (20 stories)." });
+  const title = b.series ? `Next episode of ${b.series}${idea(b).trim() ? `: ${idea(b).trim()}` : ""}` : idea(b).trim();
+  const pos = (db.prepare("SELECT MAX(pos) AS p FROM queue").get().p || 0) + 1;
+  db.prepare("INSERT INTO queue (user_id, body, title, created, pos) VALUES (?, ?, ?, ?, ?)")
+    .run(req.user.id, JSON.stringify(b), title.slice(0, 160), Date.now(), pos);
+  const w = nightWindow();
+  res.json({ ok: true, waiting: n + 1, night: inNight(), from: fmtHm(w.start), to: fmtHm(w.end) });
+});
+function ownQueue(u, id) {
+  const q = db.prepare("SELECT * FROM queue WHERE id = ?").get(parseInt(id, 10) || 0);
+  return q && (q.user_id === u.id || u.role === "owner") ? q : null;
+}
+app.delete("/api/queue/:id", (req, res) => {
+  const q = ownQueue(req.user, req.params.id);
+  if (!q) return res.json({ ok: false, error: "It's not on the list." });
+  db.prepare("DELETE FROM queue WHERE id = ?").run(q.id);
+  res.json({ ok: true });
+});
+app.post("/api/queue/:id/move", (req, res) => {          // {dir: -1 | 1}
+  const q = ownQueue(req.user, req.params.id);
+  if (!q || q.state !== "waiting") return res.json({ ok: false, error: "It's not waiting." });
+  const rows = db.prepare("SELECT id, pos FROM queue WHERE state = 'waiting' ORDER BY pos, id").all();
+  const i = rows.findIndex((r) => r.id === q.id), j = i + (req.body && req.body.dir < 0 ? -1 : 1);
+  if (j >= 0 && j < rows.length) {
+    rows.forEach((r, k) => db.prepare("UPDATE queue SET pos = ? WHERE id = ?").run(k, r.id));
+    db.prepare("UPDATE queue SET pos = ? WHERE id = ?").run(j, rows[i].id);
+    db.prepare("UPDATE queue SET pos = ? WHERE id = ?").run(i, rows[j].id);
+  }
+  res.json({ ok: true });
+});
+app.post("/api/queue/:id/now", async (req, res) => {      // don't wait for tonight
+  const q = ownQueue(req.user, req.params.id);
+  if (!q || q.state !== "waiting") return res.json({ ok: false, error: "It's not waiting." });
+  res.json(await startQueued(q));
+});
+async function startQueued(q) {
+  const u = db.prepare("SELECT * FROM users WHERE id = ?").get(q.user_id);
+  if (!u) { db.prepare("DELETE FROM queue WHERE id = ?").run(q.id); return { ok: false, error: "Unknown person." }; }
+  db.prepare("UPDATE queue SET state = 'starting', started = ? WHERE id = ?").run(Date.now(), q.id);
+  let r;
+  try { r = await startMake(u, JSON.parse(q.body), true); } catch (e) { r = { ok: false, error: String(e.message || e) }; }
+  if (r.ok && r.job_id) {
+    db.prepare("UPDATE queue SET state = 'started', job_id = ?, error = NULL WHERE id = ?").run(r.job_id, q.id);
+  } else if (q.attempts + 1 < 3) {      // the Mac asleep, Draw Things closed…: try again in half an hour
+    db.prepare("UPDATE queue SET state = 'waiting', attempts = attempts + 1, next_try = ?, error = ? WHERE id = ?")
+      .run(Date.now() + 30 * 60 * 1000, String(r.error || "Couldn't start").slice(0, 400), q.id);
+  } else {
+    db.prepare("UPDATE queue SET state = 'failed', error = ? WHERE id = ?").run(String(r.error || "Couldn't start").slice(0, 400), q.id);
+    notify(u, "Tonight's story couldn't start", `${q.title.slice(0, 80)}: ${String(r.error || "").slice(0, 200)}`, "warning");
+  }
+  return r;
+}
+let queueTurning = false;
+async function queueTick() {
+  if (queueTurning) return;
+  queueTurning = true;
+  try {
+    db.prepare("UPDATE queue SET state = 'waiting' WHERE state = 'starting' AND started < ?").run(Date.now() - 10 * 60 * 1000);
+    if (!inNight() || busyJobs().length) return;
+    const q = db.prepare("SELECT * FROM queue WHERE state = 'waiting' AND next_try <= ? ORDER BY pos, id LIMIT 1").get(Date.now());
+    if (q) await startQueued(q);
+  } finally { queueTurning = false; }
+}
+setInterval(() => { queueTick().catch((e) => console.error("queue:", e)); }, 30 * 1000);
+
+// ───────────────────────────── phone notifications (ntfy) ─────────────────────────────
+// Free: install the ntfy app and subscribe to your private topic. Sent when a story is ready or something went wrong.
+const NTFY_URL = () => (envFileValue("NTFY_URL") || "https://ntfy.sh").replace(/\/+$/, "");
+let lastBase = "";                 // the address people use for StoryMaker, for the links in notifications
+async function notify(u, title, message, tag = "books", link = "") {
+  if (!u || !u.ntfy_topic) return false;
+  try {
+    const r = await fetch(NTFY_URL(), { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ topic: u.ntfy_topic, title: title.slice(0, 120), message: message.slice(0, 1000), tags: [tag],
+        ...(link ? { click: link } : {}) }) });
+    return r.ok;
+  } catch (e) { console.error("notification:", e.message); return false; }
+}
+const KIND_DONE = { make: "is ready", rewrite: "was rewritten", cleanup: "was cleaned up", remaster: "has new audio",
+  portraits: "portraits are drawn" };
+function notifyTick() {
+  const rows = db.prepare("SELECT * FROM jobs WHERE notified = 0 AND created > datetime('now', '-3 days')").all();
+  for (const j of rows) {
+    let st;
+    try { st = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, `${j.id}.status.json`), "utf8")); } catch { continue; }
+    if (!["done", "failed", "stopped", "paused"].includes(st.state)) continue;
+    db.prepare("UPDATE jobs SET notified = 1 WHERE id = ?").run(j.id);
+    const u = db.prepare("SELECT * FROM users WHERE id = ?").get(j.user_id);
+    if (!u || !u.ntfy_topic || st.state === "stopped" || st.state === "paused") continue;
+    const took = Date.now() - Date.parse(`${j.created.replace(" ", "T")}Z`);
+    if (j.kind !== "make" && !j.from_queue && took < 3 * 60 * 1000) continue;      // quick jobs: you were watching
+    const runId = (st.result && st.result.run_id) || j.story_id;
+    const r = runId ? readResult(runId) || {} : {};
+    const secret = r.level === "explicit";                     // a lock screen shows it: no title for these
+    const name = secret ? "Your story" : (r.title || st.title || "Your story");
+    const link = lastBase && runId ? `${lastBase}/#story=${encodeURIComponent(runId)}` : lastBase;
+    if (st.state === "done") {
+      notify(u, `${name} ${KIND_DONE[j.kind] || "is done"}`, secret ? "Open StoryMaker to see it." :
+        (r.logline || "Open StoryMaker to watch or listen.").slice(0, 300), j.kind === "make" ? "tada" : "books", link);
+    } else {
+      notify(u, `${secret ? "A story" : name} stopped with a problem`,
+        `${String(st.error || "Something went wrong").slice(0, 240).replace(/[.!?]?\s*$/, ".")} What's done is kept: Recover carries on.`, "warning", lastBase);
+    }
+  }
+}
+setInterval(() => { try { notifyTick(); } catch (e) { console.error("notify:", e); } }, 20 * 1000);
+function syncStudioNotify() {           // Audio Studio tells the owner's phone too, using the same topic
+  const o = owner();
+  return helper("POST", "/api/helper/notify", { url: NTFY_URL(), topic: (o && o.ntfy_topic) || "" });
+}
+setTimeout(() => { syncStudioNotify().catch(() => {}); }, 20 * 1000);
+setInterval(() => { syncStudioNotify().catch(() => {}); }, 30 * 60 * 1000);
+app.get("/api/notify", (req, res) => {
+  const t = req.user.ntfy_topic;
+  res.json({ ok: true, on: !!t, topic: t || null, server: NTFY_URL(),
+    subscribe: t ? `${NTFY_URL()}/${t}` : null });
+});
+app.post("/api/notify", async (req, res) => {
+  const b = req.body || {};
+  if (b.on === true && !req.user.ntfy_topic) {
+    const topic = `storymaker-${crypto.randomBytes(9).toString("hex")}`;
+    db.prepare("UPDATE users SET ntfy_topic = ? WHERE id = ?").run(topic, req.user.id);
+  } else if (b.on === false) {
+    db.prepare("UPDATE users SET ntfy_topic = NULL WHERE id = ?").run(req.user.id);
+  }
+  const u = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  let studio = null;
+  if (u.role === "owner" && b.on !== undefined) studio = await syncStudioNotify();
+  let sent = null;
+  if (b.test && u.ntfy_topic) {
+    sent = await notify(u, "StoryMaker", "Notifications are working. You'll hear when a story is ready.", "tada", lastBase);
+    if (u.role === "owner") helper("POST", "/api/helper/notify", { url: NTFY_URL(), topic: u.ntfy_topic, test: true }).catch(() => {});
+  }
+  res.json({ ok: true, on: !!u.ntfy_topic, topic: u.ntfy_topic || null, server: NTFY_URL(),
+    subscribe: u.ntfy_topic ? `${NTFY_URL()}/${u.ntfy_topic}` : null, sent, studio: studio ? !!studio.ok : null });
 });
 
 function ownJob(u, id) {
@@ -1279,6 +1484,88 @@ app.get("/api/stories", (req, res) => {
   }
   stories.sort((a, b) => (a.id < b.id ? 1 : -1));
   res.json({ ok: true, stories });
+});
+
+// ───────────────────────────── the status page ─────────────────────────────
+// Everything StoryMaker relies on, checked live: the NAS, the disks, the writers, Draw Things, Audio Studio.
+const setting = (k, d = "") => process.env[k] || envFileValue(k) || d;
+async function ping(url, ms = 3500) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(ms) });
+    let j = null; try { j = await r.json(); } catch { /* not JSON */ }
+    return { ok: r.ok, status: r.status, json: j };
+  } catch (e) { return { ok: false, error: e.name === "TimeoutError" ? "didn't answer" : "can't reach it" }; }
+}
+function space(dir) {
+  try { const s = fs.statfsSync(dir); return { free: s.bavail * s.bsize, total: s.blocks * s.bsize }; } catch { return null; }
+}
+const gb = (n) => (n >= 1e12 ? `${(n / 1e12).toFixed(1)} TB` : `${Math.round(n / 1e9)} GB`);
+app.get("/api/health", async (req, res) => {
+  const parts = [];
+  const add = (name, ok, detail, kind = "") => parts.push({ name, ok, detail, kind });
+  // storage
+  const check = process.env.LIBRARY_CHECK_FILE;
+  const libOk = check ? fs.existsSync(check) : fs.existsSync(OUTPUT_DIR);
+  const ls = space(OUTPUT_DIR), js = space(JOBS_DIR);
+  add(check ? "Library on the NAS" : "Library", libOk && !!ls,
+    libOk ? (ls ? `${gb(ls.free)} free of ${gb(ls.total)}` : "connected") : "Not connected. New stories wait until it's back.", "storage");
+  if (check && js) add("Server disk (work in progress)", js.free > 5e9, `${gb(js.free)} free of ${gb(js.total)}${js.free <= 5e9 ? ". Running low." : ""}`, "storage");
+  // writers
+  const provider = setting("STORY_PROVIDER", "claude").toLowerCase();
+  const keyName = { claude: "ANTHROPIC_API_KEY", gemini: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", groq: "GROQ_API_KEY" }[provider];
+  if (keyName) add(`Writer: ${provider[0].toUpperCase() + provider.slice(1)}`, !!setting(keyName), setting(keyName) ? "Key is set" : `No ${keyName} in storymaker.env`, "writer");
+  const [main, backup, dt, studio] = await Promise.all([
+    setting("OLLAMA_URL") ? ping(`${setting("OLLAMA_URL").replace(/\/$/, "")}/api/tags`) : null,
+    setting("OLLAMA_FALLBACK_URL") ? ping(`${setting("OLLAMA_FALLBACK_URL").replace(/\/$/, "")}/api/tags`) : null,
+    setting("LOCAL_IMAGE_URL") ? ping(`${setting("LOCAL_IMAGE_URL").replace(/\/$/, "")}/`) : null,
+    helper("GET", "/api/helper/status"),
+  ]);
+  const models = (r) => ((r && r.json && r.json.models) || []).map((m) => m.name);
+  const want = setting("OLLAMA_MODEL", "llama3.1:8b"), adult = setting("OLLAMA_ADULT_MODEL", "dolphin3");
+  const has = (list, m) => list.some((n) => n === m || n.split(":")[0] === m.split(":")[0]);
+  if (main) {
+    const l = models(main);
+    add("Ollama on the Mac", main.ok, main.ok ? `${l.length} model${l.length === 1 ? "" : "s"}${has(l, want) || has(l, adult) ? "" : `; ${want} isn't downloaded`}` : `${main.error || "not answering"}. Is the Mac awake?`, "writer");
+  }
+  if (backup) {
+    const l = models(backup);
+    add("Backup Ollama (this server)", backup.ok, backup.ok ? `Ready${l.length ? ` (${l.slice(0, 3).join(", ")})` : ""}` : backup.error || "not answering", "writer");
+  }
+  if (dt) {
+    const model = dt.json && (dt.json.model || (dt.json.settings && dt.json.settings.model));
+    add("Draw Things", dt.ok, dt.ok ? (model ? `Ready: ${model}` : "Ready") : `${dt.error || "not answering"}. Open it on the Mac with its API Server on.`, "pictures");
+  }
+  let studioInfo = null;
+  if (studio && studio.ok) {
+    studioInfo = { version: studio.version, current: studio.current, waiting: studio.waiting || [], notify: studio.notify };
+    add("Audio Studio", true, `Version ${studio.version}${studio.current ? `, making ${studio.current.title}` : ", free"}`, "studio");
+  } else {
+    add("Audio Studio", false, (studio && studio.error) || "Not answering", "studio");
+  }
+  // what's being made, what's next, what finished
+  const owner_ = req.user.role === "owner";
+  const names = Object.fromEntries(db.prepare("SELECT id, username FROM users").all().map((u) => [u.id, u.username]));
+  const rows = db.prepare(`SELECT * FROM jobs WHERE created > datetime('now', '-3 days')${owner_ ? "" : " AND user_id = ?"} ORDER BY created DESC`)
+    .all(...(owner_ ? [] : [req.user.id]));
+  const now = [], recent = [];
+  for (const j of rows) {
+    let st, mt;
+    try { const f = path.join(JOBS_DIR, `${j.id}.status.json`); st = JSON.parse(fs.readFileSync(f, "utf8")); mt = fs.statSync(f).mtimeMs; } catch { continue; }
+    const runId = (st.result && st.result.run_id) || j.story_id;
+    const r = runId ? readResult(runId) || {} : {};
+    let info = {}; try { info = JSON.parse(j.info || "{}"); } catch { /* old */ }
+    const item = { id: j.id, kind: j.kind, state: st.state, title: r.title || st.title || info.idea || "A story", progress: st.progress || 0,
+      detail: st.detail || "", error: st.error || null, when: mt, runId: runId || null, by: owner_ && j.user_id !== req.user.id ? names[j.user_id] : null,
+      fromQueue: !!j.from_queue };
+    if ((st.state === "running" || st.state === "queued") && Date.now() - mt < 60 * 60 * 1000) now.push(item);
+    else if (["done", "failed"].includes(st.state) && recent.length < 12) recent.push(item);
+  }
+  const q = db.prepare(`SELECT * FROM queue WHERE state = 'waiting'${owner_ ? "" : " AND user_id = ?"} ORDER BY pos, id`).all(...(owner_ ? [] : [req.user.id]));
+  const w = nightWindow();
+  res.json({ ok: true, checked: Date.now(), tz: process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone,
+    uptime: Math.round((Date.now() - STARTED) / 1000), parts, now, recent, studio: studioInfo,
+    queue: { items: q.map((x) => queueRow(x, req.user)), night: inNight(), from: fmtHm(w.start), to: fmtHm(w.end), next: nextNight().toISOString() },
+    notify: !!req.user.ntfy_topic });
 });
 
 app.listen(PORT, () => console.log(`StoryMaker web page on http://localhost:${PORT}`));

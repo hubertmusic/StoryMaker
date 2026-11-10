@@ -150,6 +150,7 @@ $("signOut").addEventListener("click", async () => { await api("/api/logout", {}
 
 async function openSettings() {
   await loadMe();
+  loadNotify().catch(() => {});
   $("setUser").value = me.username || "";
   $("setPw").value = ""; $("setPw2").value = ""; $("setCurrent").value = "";
   $("setAdult").checked = !!me.adultSwitch;
@@ -272,6 +273,89 @@ function renderChecks(checks) {
 }
 $("changeBtn").addEventListener("click", () => { show("stageEmpty"); $("idea").focus(); });
 
+// ── tonight: made overnight, one after another ──
+$("tonightBtn").addEventListener("click", async () => {
+  $("tonightBtn").disabled = true;
+  const r = await api("/api/queue", formData());
+  $("tonightBtn").disabled = false;
+  if (!r.ok) { $("tonightMsg").textContent = r.error || "Couldn't add it."; return; }
+  $("tonightMsg").textContent = r.night
+    ? `Added. It's night time, so it starts as soon as nothing else is being made (${r.waiting} on the list).`
+    : `Added to tonight's list (${r.waiting} waiting). They're made between ${r.from} and ${r.to}.`;
+  loadQueue();
+});
+const MODE_NAMES = { story: "Story", audio: "Audio", video: "Video" };
+async function loadQueue() {
+  const r = await api("/api/queue", null, "GET").catch(() => null);
+  const panel = $("queuePanel");
+  if (!r || !r.ok || !r.items.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const waiting = r.items.filter((i) => i.state === "waiting");
+  $("queueHint").textContent = waiting.length
+    ? (r.night ? "Night time: these are being made one after another." : `Made between ${r.from} and ${r.to}, one after another. Change the hours with QUEUE_START and QUEUE_END in storymaker.env.`)
+    : "Last night's list.";
+  const list = $("queueList"); list.replaceChildren();
+  r.items.forEach((q) => {
+    const row = document.createElement("div"); row.className = "queue-row";
+    const t = document.createElement("div"); t.className = "q-title"; t.textContent = q.title;
+    const sub = document.createElement("div"); sub.className = "small";
+    const bits = [MODE_NAMES[q.mode] || q.mode];
+    if (q.chapters > 1) bits.push(`${q.chapters} chapters`);
+    if (q.level) bits.push(LEVEL_NAMES[q.level] || q.level);
+    if (q.bedtime) bits.push("bedtime");
+    if (q.by) bits.push(`by ${q.by}`);
+    if (q.state === "started") bits.push("started");
+    if (q.state === "failed") bits.push(`couldn't start: ${q.error || ""}`);
+    else if (q.state === "waiting" && q.error) bits.push(`will try again (${q.error.slice(0, 120)})`);
+    sub.textContent = bits.join(", ");
+    const txt = document.createElement("div"); txt.className = "q-text"; txt.append(t, sub);
+    const tools = document.createElement("div"); tools.className = "q-tools";
+    const b = (label, title, fn) => { const x = document.createElement("button"); x.type = "button"; x.className = "small-btn"; x.textContent = label; x.title = title; x.setAttribute("aria-label", title); x.addEventListener("click", fn); return x; };
+    if (q.state === "waiting") {
+      const i = waiting.indexOf(q);
+      if (i > 0) tools.appendChild(b("↑", "Make it sooner", async () => { await api(`/api/queue/${q.id}/move`, { dir: -1 }); loadQueue(); }));
+      if (i < waiting.length - 1) tools.appendChild(b("↓", "Make it later", async () => { await api(`/api/queue/${q.id}/move`, { dir: 1 }); loadQueue(); }));
+      tools.appendChild(b("Start now", "Don't wait for tonight", async (e) => {
+        e.target.disabled = true; const x = await api(`/api/queue/${q.id}/now`, {});
+        if (!x.ok) sub.textContent = x.error || "Couldn't start it."; else { loadQueue(); loadUnfinished(); }
+      }));
+      tools.appendChild(b("Remove", "Take it off the list", async () => { await api(`/api/queue/${q.id}`, null, "DELETE"); loadQueue(); }));
+    } else {
+      tools.appendChild(b("Clear", "Take it off the list", async () => { await api(`/api/queue/${q.id}`, null, "DELETE"); loadQueue(); }));
+    }
+    row.append(txt, tools); list.appendChild(row);
+  });
+}
+
+// ── phone notifications ──
+async function loadNotify(r) {
+  r = r || await api("/api/notify", null, "GET");
+  const box = $("notifyBody"); box.replaceChildren();
+  const btn = (label, cls, fn) => { const x = document.createElement("button"); x.type = "button"; x.className = cls; x.textContent = label; x.addEventListener("click", fn); return x; };
+  const msg = document.createElement("p"); msg.className = "settings-msg"; msg.setAttribute("role", "status");
+  if (!r.on) {
+    box.append(btn("Turn on phone notifications", "go go-small", async () => loadNotify(await api("/api/notify", { on: true }))), msg);
+    return;
+  }
+  const steps = document.createElement("ol"); steps.className = "notify-steps";
+  const li = (nodes) => { const l = document.createElement("li"); l.append(...nodes); steps.appendChild(l); };
+  li(["Install the free ", Object.assign(document.createElement("b"), { textContent: "ntfy" }), " app on your phone (App Store or Google Play)."]);
+  const code = document.createElement("code"); code.textContent = r.topic;
+  const copy = btn("Copy", "small-btn", async () => { try { await navigator.clipboard.writeText(r.topic); copy.textContent = "Copied"; } catch { copy.textContent = "Select it and copy"; } });
+  li(["Tap + and subscribe to this topic: ", code, " ", copy]);
+  if (!/^https:\/\/ntfy\.sh$/.test(r.server)) li([`In the app, choose "Use another server" and type ${r.server}.`]);
+  li(["Send a test to check it arrives."]);
+  const row = document.createElement("div"); row.className = "cs-row";
+  row.append(btn("Send a test", "small-btn", async () => {
+    msg.textContent = "Sending…";
+    const x = await api("/api/notify", { test: true });
+    msg.textContent = x.sent ? "Sent. It should pop up on your phone in a few seconds." : "Couldn't send it. Is the server online?";
+  }), btn("Turn off", "small-btn warn", async () => loadNotify(await api("/api/notify", { on: false }))));
+  const note = document.createElement("p"); note.className = "level-note";
+  note.textContent = "The topic is your private channel: anyone who knows it could read the messages, so they only ever say a story's title (and not even that for Explicit ones). Audio Studio on the Mac uses it too.";
+  box.append(steps, row, msg, note);
+}
+
 // ── make it ──
 $("makeBtn").addEventListener("click", async () => {
   $("makeBtn").disabled = true;
@@ -386,7 +470,10 @@ function mediaBlock(s) {
   const wrap = document.createElement("div");
   wrap.className = "player" + (s.bedtime ? " bedtime" : "");
   let m = null;
-  if (s.video_url || s.video) {
+  // a video story can be played as sound only, so it keeps going with the phone's screen off
+  const canListen = !!((s.video_url || s.video) && (s.audio_url || s.audio));
+  const listenOnly = canListen && (s._listen !== undefined ? s._listen : !!readerPrefs().listenOnly);
+  if ((s.video_url || s.video) && !listenOnly) {
     const v = document.createElement("video");
     v.controls = true; v.preload = "metadata"; v.src = s.video_url || s.video; v.playsInline = true;
     v.poster = s.thumb || v.src.replace(/story\.mp4$/, "thumb.jpg");
@@ -403,7 +490,18 @@ function mediaBlock(s) {
     wrap.appendChild(a); m = a;
   }
   const sid = s.id || s.run_id;
-  if (m && sid && s.id) wrap.appendChild(listenTools(s, m));
+  if (m && sid && s.id) {
+    const swap = canListen ? () => {
+      const at = m.currentTime, playing = !m.paused;
+      m.pause();
+      saveReaderPrefs({ ...readerPrefs(), listenOnly: !listenOnly });
+      const nw = mediaBlock({ ...s, _listen: !listenOnly, _startAt: at });
+      wrap.replaceWith(nw);
+      const nm = nw.querySelector("video, audio");
+      if (nm && playing) nm.play().catch(() => {});
+    } : null;
+    wrap.appendChild(listenTools(s, m, swap, listenOnly));
+  }
   const links = document.createElement("div");
   links.className = "downloads";
   const add = (href, label) => { if (!href) return; const a = document.createElement("a"); a.href = href; a.textContent = label; a.download = ""; links.appendChild(a); };
@@ -441,7 +539,7 @@ function parseVtt(text) {
   return cues;
 }
 let sleepTimer = null;           // one sleep timer for the whole page
-function listenTools(s, m) {
+function listenTools(s, m, swap, listenOnly) {
   const id = s.id;
   const box = document.createElement("div"); box.className = "listen";
   const bar = document.createElement("div"); bar.className = "listen-bar";
@@ -569,6 +667,7 @@ function listenTools(s, m) {
   window.addEventListener("pagehide", () => { if (!m.paused) save(true); });
 
   const pickUp = async () => {
+    if (s._startAt !== undefined) { m.currentTime = s._startAt; return; }     // switched between video and sound
     const p = await fetch(`/api/stories/${encodeURIComponent(id)}/position`).then((x) => x.json()).catch(() => ({}));
     const dur = m.duration || p.dur || 0;
     if (p.pos > 15 && (!dur || p.pos < dur - 20) && m.currentTime < 1) {
@@ -592,7 +691,32 @@ function listenTools(s, m) {
     if (readerPrefs().readAlong && s.subtitles) showReadAlong();
   }).catch(() => {});
 
+  // the lock screen and Control Center: title, cover, play/pause, skip and chapter buttons
+  m.addEventListener("play", () => {
+    if (!("mediaSession" in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: s.title || "Story",
+        artist: s.series ? `${s.series}${s.episode ? `, episode ${s.episode}` : ""}` : "StoryMaker", album: "StoryMaker",
+        artwork: s.thumb ? [{ src: new URL(s.thumb, location.href).href, sizes: "640x427", type: "image/jpeg" }] : [] });
+      const ms = navigator.mediaSession, set = (a, f) => { try { ms.setActionHandler(a, f); } catch { /* not on this device */ } };
+      set("play", () => m.play()); set("pause", () => m.pause());
+      set("seekbackward", (d) => { m.currentTime = Math.max(0, m.currentTime - ((d && d.seekOffset) || 15)); });
+      set("seekforward", (d) => { m.currentTime = Math.min(m.duration || 1e9, m.currentTime + ((d && d.seekOffset) || 30)); });
+      set("seekto", (d) => { if (d && d.seekTime !== undefined) m.currentTime = d.seekTime; });
+      set("previoustrack", chapters.length > 1 ? () => {
+        const t = m.currentTime; const back = [...chapters].reverse().find((c) => c.start < t - 3); m.currentTime = back ? back.start : 0;
+      } : null);
+      set("nexttrack", chapters.length > 1 ? () => { const n = chapters.find((c) => c.start > m.currentTime + 1); if (n) m.currentTime = n.start; } : null);
+    } catch { /* older browser */ }
+  });
+
   bar.append(chField, field("Speed", speed), field("Sleep", sleep), sleepLeft, raBtn);
+  if (swap) {
+    const sw = document.createElement("button"); sw.type = "button"; sw.className = "quiet";
+    sw.textContent = listenOnly ? "Watch the video" : "Listen only";
+    sw.title = listenOnly ? "Show the pictures again" : "Just the sound, so it keeps playing with the screen off";
+    sw.addEventListener("click", swap); bar.appendChild(sw);
+  }
   const off = offlineButton(s);
   if (off) bar.appendChild(off);
   box.append(bar, where, ra);
@@ -1592,6 +1716,7 @@ async function loadNas() {
 async function loadLibrary() {
   loadUnfinished();
   loadNas();
+  loadQueue();
   const r = await api("/api/stories");
   const filter = $("filter").value;
   const shelf = $("shelf");
@@ -1626,6 +1751,15 @@ async function loadLibrary() {
     shelf.appendChild(b);
   }
   $("offlineNote").hidden = navigator.onLine;
+  openLinkedStory(r.stories || []);
+}
+// a link from a notification (…/#story=<id>) opens that story
+function openLinkedStory(stories) {
+  const m = location.hash.match(/^#story=(.+)$/);
+  if (!m) return;
+  const s = stories.find((x) => x.id === decodeURIComponent(m[1]));
+  history.replaceState(null, "", location.pathname);
+  if (s) { storyCard(s, $("viewerBody")); $("viewer").showModal(); }
 }
 window.addEventListener("online", () => loadLibrary());
 window.addEventListener("offline", () => loadLibrary());

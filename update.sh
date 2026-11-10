@@ -27,10 +27,24 @@ unzip -q "$ZIP" -d "$TMP"
 SRC="$TMP/storymaker"
 [ -f "$SRC/storymaker.py" ] || { echo "That zip doesn't look like StoryMaker."; exit 1; }
 
+# your time zone, so the overnight list runs at night where you are (added once, if it isn't set)
+add_tz() {
+  [ -f "$APP/storymaker.env" ] || return 0
+  grep -qE '^TZ=.+' "$APP/storymaker.env" && return 0
+  local z=""
+  if [ "$(uname -s)" = "Darwin" ]; then z="$(readlink /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##')"
+  else z="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)"; fi
+  case "$z" in ""|UTC|Etc/UTC|Universal)
+    echo "  (Set your time zone for the overnight list: add TZ=America/New_York, or yours, to storymaker.env.)"; return 0;; esac
+  printf '\n# Your time zone, for the overnight list\nTZ=%s\n' "$z" >> "$APP/storymaker.env"
+  echo "  Time zone set to $z."
+}
+
 if [ "$(uname -s)" = "Linux" ]; then
   echo "▸ Updating StoryMaker on the server (your stories on the NAS, settings and database stay as they are)…"
   rsync -a --exclude 'storymaker.env' --exclude 'local' --exclude 'audiostudio' "$SRC/" "$APP/"
   chmod +x "$APP/update.sh" "$APP/server/"*.sh 2>/dev/null || true
+  add_tz
   DOCKER="docker"; docker info >/dev/null 2>&1 || DOCKER="sudo docker"
   cd "$APP" && $DOCKER compose -f "$APP/docker-compose.server.yml" up -d --build
   for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code}' http://localhost:8095/login.html | grep -q 200 && break; sleep 3; done
@@ -84,6 +98,7 @@ if [ ! -f "$APP/storymaker.env" ]; then
 fi
 
 echo
+add_tz
 if [ -f "$APP/.storymaker-on-server" ]; then
   echo "▸ StoryMaker runs on the server ($(cat "$APP/.storymaker-on-server")) now: update it there with the same zip:"
   echo "    bash ~/StoryMaker/update.sh"

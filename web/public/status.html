@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StoryMaker status</title>
+<meta name="theme-color" content="#1f2440">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="status-page">
+<header class="top">
+  <h1 class="brand"><a href="/">StoryMaker</a></h1>
+  <nav>
+    <a href="/#make">Make a story</a>
+    <a href="/#library">Library</a>
+    <a href="status.html" aria-current="page">Status</a>
+  </nav>
+</header>
+<main class="status">
+  <div class="status-head">
+    <h2>Status</h2>
+    <p class="hint" id="checked" role="status">Checking…</p>
+    <button type="button" class="small-btn" id="refresh">Check again</button>
+  </div>
+
+  <section class="status-block">
+    <h3>Being made now</h3>
+    <div id="nowList"></div>
+  </section>
+
+  <section class="status-block">
+    <h3>Tonight</h3>
+    <p class="hint" id="queueHint"></p>
+    <div id="queueList"></div>
+  </section>
+
+  <section class="status-block">
+    <h3>What StoryMaker uses</h3>
+    <ul class="parts" id="parts"></ul>
+  </section>
+
+  <section class="status-block" id="studioBlock" hidden>
+    <h3>Audio Studio</h3>
+    <div id="studioBody"></div>
+  </section>
+
+  <section class="status-block">
+    <h3>Finished lately</h3>
+    <ul class="recent" id="recent"></ul>
+  </section>
+</main>
+<script src="status.js"></script>
+</body>
+</html>

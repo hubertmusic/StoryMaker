@@ -921,3 +921,22 @@ everything done so far, so another story or book can go first. Resume carries on
 - **Bedtime story** (a tick box on the form): calm and safe from start to finish, slowing down towards a cosy ending,
   with quieter sounds and music and a slightly slower narrator. It's marked *Bedtime* in the library, and its player
   opens dimmed with a 20-minute sleep timer set.
+
+## 27. Overnight list, phone notifications, status page
+
+- **Make it tonight:** after checking a story's price, *Make it tonight* puts it on tonight's list instead of starting
+  it. The list is made one story after another during the night hours (11pm to 6:30am; change them with QUEUE_START
+  and QUEUE_END in storymaker.env), while the Mac's writer and Draw Things are free. The list is in the Library
+  under **Tonight**: move stories up or down, remove them, or *Start now*. If one can't start (say the Mac is asleep),
+  it's tried again half an hour later, up to three times.
+- **Time zone:** the update adds your time zone (TZ=) to storymaker.env so "tonight" is your night. On the server,
+  check it's there: `grep ^TZ ~/StoryMaker/storymaker.env`.
+- **Phone notifications:** in Settings (the gear), *Turn on phone notifications*, install the free **ntfy** app and
+  subscribe to the topic shown. Then press *Send a test*. You get a message when a story is ready (tap it to open
+  the story) or stops with a problem. Audio Studio uses the same topic for finished audiobooks. The topic is a
+  private channel, so messages only ever give a story's title, and Explicit stories don't show even that.
+- **Status page** (Status at the top): what's being made now, tonight's list, and a live check of everything
+  StoryMaker uses (the NAS and free space, the server disk, the writers, the backup Ollama, Draw Things, Audio Studio
+  and what it's recording), plus what finished lately.
+- **On the lock screen:** a playing story shows its title, cover and skip and chapter buttons on the lock screen
+  and in Control Center. *Listen only* plays a video story as sound, so it keeps going with the screen off.
