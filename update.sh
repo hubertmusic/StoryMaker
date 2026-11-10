@@ -11,7 +11,7 @@ set -euo pipefail
 APP="$HOME/StoryMaker"
 ZIP="${1:-}"
 if [ -z "$ZIP" ]; then
-  ZIP="$(ls -t "$HOME"/Downloads/StoryMaker*.zip 2>/dev/null | head -1 || true)"
+  ZIP="$(ls -t "$HOME"/Downloads/StoryMaker*.zip "$HOME"/storymaker-move/StoryMaker*.zip /mnt/storymaker/StoryMaker*.zip 2>/dev/null | head -1 || true)"
 fi
 if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
   echo "Can't find StoryMaker.zip in your Downloads folder. Download it first, or give its path:"
@@ -27,13 +27,26 @@ unzip -q "$ZIP" -d "$TMP"
 SRC="$TMP/storymaker"
 [ -f "$SRC/storymaker.py" ] || { echo "That zip doesn't look like StoryMaker."; exit 1; }
 
+if [ "$(uname -s)" = "Linux" ]; then
+  echo "▸ Updating StoryMaker on the server (your stories on the NAS, settings and database stay as they are)…"
+  rsync -a --exclude 'storymaker.env' --exclude 'local' --exclude 'audiostudio' "$SRC/" "$APP/"
+  chmod +x "$APP/update.sh" "$APP/server/"*.sh 2>/dev/null || true
+  DOCKER="docker"; docker info >/dev/null 2>&1 || DOCKER="sudo docker"
+  cd "$APP" && $DOCKER compose -f "$APP/docker-compose.server.yml" up -d --build
+  for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code}' http://localhost:8095/login.html | grep -q 200 && break; sleep 3; done
+  curl -s -o /dev/null -w '%{http_code}' http://localhost:8095/login.html | grep -q 200 \
+    && echo "  StoryMaker is running." || echo "  StoryMaker didn't answer yet: $DOCKER logs storymaker --tail 40"
+  echo "  (Audio Studio stays on the Mac: run the update there too, with the same zip.)"
+  exit 0
+fi
+
 echo "▸ Putting the new program files in $APP (your stories and settings stay as they are)…"
 mkdir -p "$APP" "$APP/output" "$APP/sounds" "$APP/music" "$APP/studio"
 rsync -a \
   --exclude 'storymaker.env' --exclude 'output' --exclude 'sounds' --exclude 'music' --exclude 'studio' \
   --exclude 'audiostudio/venv' --exclude 'audiostudio/studio.env' \
   "$SRC/" "$APP/"
-chmod +x "$APP/update.sh" "$APP/audiostudio/"*.sh
+chmod +x "$APP/update.sh" "$APP/audiostudio/"*.sh "$APP/mac/"*.sh "$APP/server/"*.sh 2>/dev/null || true
 
 # first time: make storymaker.env with your choices
 if [ ! -f "$APP/storymaker.env" ]; then
@@ -64,8 +77,6 @@ if [ ! -f "$APP/storymaker.env" ]; then
     [ -n "$PASSWORD" ] && echo "APP_PASSWORD=$PASSWORD"
     if [ "$DRAW" = "y" ] || [ "$DRAW" = "Y" ]; then
       echo "LOCAL_IMAGE_URL=http://host.docker.internal:7860"
-      echo "LOCAL_IMAGE_STEPS=4"
-      echo "LOCAL_IMAGE_CFG=1.5"
     fi
   } >> "$APP/storymaker.env"
   chmod 600 "$APP/storymaker.env"
@@ -73,6 +84,10 @@ if [ ! -f "$APP/storymaker.env" ]; then
 fi
 
 echo
+if [ -f "$APP/.storymaker-on-server" ]; then
+  echo "▸ StoryMaker runs on the server ($(cat "$APP/.storymaker-on-server")) now: update it there with the same zip:"
+  echo "    bash ~/StoryMaker/update.sh"
+else
 echo "▸ Starting StoryMaker (Docker)…"
 cd "$APP"
 docker compose up -d --build
@@ -85,19 +100,27 @@ if curl -s -o /dev/null -w '%{http_code}' http://localhost:8095/login.html | gre
 else
   echo "  StoryMaker didn't answer yet. Check with: docker logs storymaker --tail 30"
 fi
+fi
 
 echo
 echo "▸ Audio Studio…"
 cd "$APP/audiostudio"
 bash "$APP/audiostudio/install.sh"
 # a studio started by hand in a Terminal window keeps running the old version: stop it so the new one takes over
-OLD=$(lsof -t -iTCP:8096 -sTCP:LISTEN 2>/dev/null || true)
-if [ -n "$OLD" ]; then echo "  Stopping the studio that's running now (it's the old version)…"; kill $OLD 2>/dev/null || true; sleep 3; fi
+# (one run by the Mac's background services is stopped and restarted by autostart.sh below, not here)
+if ! launchctl print "gui/$(id -u)/com.storymaker.audiostudio" >/dev/null 2>&1; then
+  OLD=$(lsof -t -iTCP:8096 -sTCP:LISTEN 2>/dev/null || true)
+  if [ -n "$OLD" ]; then echo "  Stopping the studio that's running now (it's the old version)…"; kill $OLD 2>/dev/null || true; sleep 3; fi
+fi
 bash "$APP/audiostudio/autostart.sh"
 sleep 10
 grep -o "Audio Studio [0-9.]* ([^)]*)" "$APP/studio/studio.log" 2>/dev/null | tail -1 || true
 
 echo
 echo "All done."
+if [ -f "$APP/.storymaker-on-server" ]; then
+echo "  StoryMaker:   http://$(cat "$APP/.storymaker-on-server"):8095    (on the server)"
+else
 echo "  StoryMaker:   http://localhost:8095    (anywhere: https://<your-mac>.ts.net)"
+fi
 echo "  Audio Studio: http://localhost:8096    (anywhere: https://<your-mac>.ts.net:8443)"

@@ -242,3 +242,35 @@ dialog#makeDlg { width: min(560px, calc(100vw - 32px)); }
 .mk-plan { margin: 16px 0; padding: 12px 14px 12px 34px; border-radius: 12px; background: var(--shelf-2, rgba(255,255,255,.05)); display: grid; gap: 4px; }
 .mk-plan .mk-plan-h { font-weight: 700; list-style: none; margin-left: -20px; }
 .mk-buttons { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+.style-line { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
+.style-line select { width: auto; }
+
+/* the NAS */
+.shelf-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.nas-move { margin: 0 0 18px; padding: 14px; border-radius: 14px; background: var(--shelf-2, rgba(255,255,255,.05)); display: grid; gap: 8px; }
+.nas-pick { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; margin-top: 0; }
+.nas-go { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.nas-books { margin-top: 26px; }
+.nas-books .panel-h.small { font-size: 1.05rem; }
+.nas-book { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
+.nb-t { display: grid; gap: 2px; min-width: 0; }
+.nb-t strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nas-book .hint:empty { display: none; }
+.nas-book > .hint { grid-column: 1 / -1; margin: 0; }
+.choice.four:has(#srcNasChoice:not([hidden])) { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 560px) { .choice.four:has(#srcNasChoice:not([hidden])) { grid-template-columns: 1fr 1fr; } }
+
+.book-line.two { grid-template-columns: minmax(0, 1fr) auto auto; }
+.pill.paused { background: color-mix(in srgb, var(--muted) 30%, transparent); }
+.resume-row { border: 1px solid currentColor; }
+@media (max-width: 560px) { .book-line.two { grid-template-columns: 1fr 1fr; } .book-line.two .book-row { grid-column: 1 / -1; } }
+
+/* Audiobooks | Archive */
+.lib-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 18%, transparent); margin-right: auto; margin-left: 14px; }
+.lib-tabs [role="tab"] { border: 0; background: transparent; color: inherit; padding: 6px 14px; border-radius: 999px; font: inherit; font-size: .9rem; cursor: pointer; }
+.lib-tabs [role="tab"][aria-selected="true"] { background: var(--lamp, #f0b54a); color: var(--lamp-ink, #2b1d05); font-weight: 600; }
+.lib-tabs [role="tab"]:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.shelf-head { flex-wrap: wrap; align-items: center; }
+.danger { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }

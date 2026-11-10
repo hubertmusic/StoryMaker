@@ -76,8 +76,10 @@ DEFAULTS = {
     "VIDEO_PROVIDER": "auto",              # auto | omni | veo | slideshow | demo
     "IMAGE_PROVIDER": "auto",              # auto | local | openai | gemini | cards
     "LOCAL_IMAGE_URL": "",                 # free pictures on your Mac: Draw Things' API server, e.g. http://localhost:7860
-    "LOCAL_IMAGE_STEPS": "24",
-    "LOCAL_IMAGE_CFG": "6",
+    "LOCAL_IMAGE_STEPS": "auto",           # auto = what suits the model Draw Things has loaded (or a number)
+    "LOCAL_IMAGE_CFG": "auto",             # guidance: auto, or a number
+    "LOCAL_IMAGE_MODEL": "",               # blank = whatever model Draw Things has selected
+    "PICTURE_STYLE": "storybook",          # storybook | realistic | cinematic (each story can choose its own)
     "COVER_ART": "on",                     # paint a cover for every story when pictures are free (local)
     "TTS_PROVIDER": "auto",                # auto | elevenlabs | openai | gemini | say | edge | espeak | silent
 
@@ -97,6 +99,8 @@ DEFAULTS = {
     "GROQ_FALLBACK": "ollama",                    # Groq's free allowance used up: carry on with Ollama (off = stop)
     "OLLAMA_URL": "http://localhost:11434",  # in Docker on a Mac: http://host.docker.internal:11434
     "OLLAMA_MODEL": "llama3.1:8b",
+    "OLLAMA_FALLBACK_URL": "",                # a backup Ollama when OLLAMA_URL's isn't there (e.g. on the server)
+    "OLLAMA_FALLBACK_MODEL": "",              # the backup's model, if it doesn't have the same one
 
     "OMNI_MODEL": "gemini-omni-1.1-flash",
     "VEO_MODEL": "veo-3.1-fast-generate-preview",
@@ -192,6 +196,8 @@ DEFAULTS = {
     "PRICE_VOICE_PER_MIN_ELEVENLABS": "0",   # comes out of your ElevenLabs plan credits
 
     "OUTPUT_DIR": "~/StoryMaker/output",
+    "LIBRARY_CHECK_FILE": "",              # a file that's only there when the NAS is connected (the server sets it)
+    "JOBS_DIR": "",                        # stories being made (blank = OUTPUT_DIR/.jobs); a local disk when OUTPUT_DIR is a NAS
     "PUBLIC_DIR": "",
     "PUBLIC_BASE_URL": "",
     "MEDIA_BASE_URL": "",                  # web page: links to files where the web page serves OUTPUT_DIR
@@ -594,14 +600,12 @@ def _switch_to_ollama(cfg):
     The rest of this story is written by Ollama, so it isn't left half-done."""
     if str(cfg.get("GROQ_FALLBACK", "ollama")).lower() != "ollama":
         return False
-    models = ollama_ready(cfg)
-    if models is None:
-        open_mac_app(cfg, "ollama")
-        models = ollama_ready(cfg)
-    want = str(cfg.get("OLLAMA_MODEL") or "")
-    if not models or not any(m == want or m.split(":")[0] == want.split(":")[0] for m in models):
+    which, _ = pick_ollama(cfg, wake=True)
+    if which is None:
         return False
-    log(f"Groq's free allowance is used up for now, so the rest of this story is written by Ollama ({want}) on the Mac.")
+    where = "on the Mac" if which == "main" else "on the server (the Mac's isn't answering)"
+    log(f"Groq's free allowance is used up for now, so the rest of this story is written by Ollama "
+        f"({cfg['OLLAMA_MODEL']}) {where}.")
     cfg["STORY_PROVIDER"] = "ollama"
     return True
 
@@ -684,6 +688,8 @@ def ask_writer(cfg, prompt, as_json=True, system=None, think=None):
                     continue
                 break
         elif provider == "ollama":
+            if cfg.get("OLLAMA_FALLBACK_URL"):
+                pick_ollama(cfg)
             try:
                 r = requests.post(f"{cfg['OLLAMA_URL'].rstrip('/')}/api/chat",
                                   json={"model": cfg["OLLAMA_MODEL"], "stream": False,
@@ -699,6 +705,10 @@ def ask_writer(cfg, prompt, as_json=True, system=None, think=None):
                                         "messages": msgs},
                                   timeout=1800)
             except requests.ConnectionError:
+                # the Mac went to sleep partway through: carry on with the backup, if there is one
+                if cfg.get("OLLAMA_FALLBACK_URL") and not cfg.get("_OLLAMA_RETRIED"):
+                    pick_ollama(cfg, wake=True, fresh=True)
+                    return ask_writer({**cfg, "_OLLAMA_RETRIED": "1"}, prompt, as_json, system, think)
                 raise RuntimeError(f"Can't reach Ollama at {cfg['OLLAMA_URL']}. Is the Ollama app running?")
             if r.status_code != 200:
                 raise RuntimeError(f"Ollama error {r.status_code}: {r.text[:300]} "
@@ -2157,10 +2167,19 @@ def fit_cover(img, w, h):
 PICTURE_UNSAFE = re.compile(
     GRAPHIC.pattern[:-3] + r"|sex\w*|erotic\w*|horny|arous\w*|strip\w*|breasts?|boob\w*|bras?|foreplay|grind\w*|"
     r"kink\w*|naughty|seduc\w*|lust\w*|topless|shirtless|bare[- ]chested|bare skin|unclothed|undress\w*|"
-    r"nightgown|negligee|towel|bath\w*|shower\w*|sheets|under the covers|in bed|on the bed|bedroom|"
-    r"cleavage|thighs?|hips|curves?|curvy|busty|sweat\w*|panting|writh\w*|entwined|tangled|on top of|"
-    r"beneath (?:him|her)|skin to skin|body|bodies|push\w* (?:\w+ )?against|pin\w*|press\w* against|touch\w*|caress\w*|stroke\w*|grop\w*|bite|biting|"
+    r"nightgown|negligee|towel|bath|bathtub|bathing|shower\w*|(?:bed|silk|satin) ?sheets|between the sheets|"
+    r"under the covers|in bed|on the bed|bedroom|cleavage|thighs?|hips|curves?|curvy|busty|writh\w*|entwined|"
+    r"tangled (?:together|in each other|limbs)|on top of (?:him|her|me|each other)|skin to skin|"
+    r"(?:his|her|their) bod(?:y|ies) (?:against|pressed|entwined)|touch\w*|caress\w*|stroke\w*|grop\w*|bite|biting|"
     r"young|youthful|petite|tiny|little|girl\w*|boy\w*|teen\w*|school\w*|child\w*|kid\w*)\b", re.I)
+
+
+# A fight, an argument, a chase: pictures should show the drama (fists, shouting, pointing, struggling).
+CONFLICT = re.compile(r"\b(fight\w*|fought|punch\w*|kick\w*|slam\w*|shov\w*|wrestl\w*|struggl\w*|brawl\w*|"
+                      r"shout\w*|yell\w*|scream\w*|roar\w*|argu\w*|confront\w*|furious|rage|raging|glar\w*|"
+                      r"jab\w*|point\w* (?:at|a finger)|hurl\w*|throw\w*|threw|swing\w*|swung|charg\w*|lung\w*|"
+                      r"tackl\w*|grabb?\w*|chas\w*|duel\w*|sword\w*|gun\w*|aim\w*|attack\w*|clash\w*|battle\w*)\b",
+                      re.I)
 
 
 def picture_safe(prompt, level):
@@ -2187,11 +2206,62 @@ ILLUSTRATE = ("illustrated scene with the characters in action: full figures, ex
               "a clear moment of action, dynamic composition, storybook illustration")
 DEFAULT_LOOK = "vivid storybook illustration, expressive characters, ink and watercolour, rich colour, warm light"
 
+# How the pictures look. Storybook keeps the writer's own look for the story; Realistic and Cinematic replace it,
+# so a "Pixar-style" or "watercolour" look from the writer can't turn a realistic picture back into a cartoon.
+PICTURE_STYLES = {
+    "storybook": {"name": "Storybook", "shot": ILLUSTRATE, "look": DEFAULT_LOOK, "neg": "", "keep_writer_look": True},
+    "realistic": {
+        "name": "Realistic",
+        "shot": ("a candid photograph of the characters in the middle of the action: real people, full figures, natural "
+                 "expressions and body language, a real moment caught on camera"),
+        "look": ("photorealistic, true-to-life detail, natural skin texture, realistic proportions, natural light, "
+                 "35mm photograph, sharp focus, depth of field"),
+        "neg": ("cartoon, illustration, drawing, painting, sketch, anime, manga, 3d render, cgi, plastic skin, doll, "
+                "toy, comic, watercolor, oversaturated"),
+        "keep_writer_look": False},
+    "3d": {
+        "name": "3D animated",
+        "shot": ("a frame from a 3D animated feature film: the characters in the middle of the action, full figures, "
+                 "exaggerated expressive faces and body language, a dynamic moment"),
+        "look": ("3D animated film still, stylized CGI characters with appealing proportions, soft global illumination, "
+                 "subsurface scattering, rich colour, detailed textures, high-end 3D render, depth of field"),
+        "neg": ("photograph, photorealistic, real people, flat 2d, sketch, line art, watercolor, painting, anime, "
+                "low poly, plastic toy, uncanny"),
+        "keep_writer_look": False},
+    "cinematic": {
+        "name": "Cinematic",
+        "shot": ("a film still of the characters in the middle of the action: real people, full figures, expressive "
+                 "faces, a dramatic moment, cinematic composition"),
+        "look": ("cinematic film still, photorealistic, dramatic lighting, shallow depth of field, anamorphic lens, "
+                 "colour graded, atmospheric, highly detailed"),
+        "neg": ("cartoon, illustration, drawing, painting, sketch, anime, manga, 3d render, cgi, plastic skin, doll, "
+                "toy, comic, watercolor, flat lighting"),
+        "keep_writer_look": False},
+}
+
+
+def picture_style(story_or_cfg):
+    key = str((story_or_cfg or {}).get("picture_style") or (story_or_cfg or {}).get("PICTURE_STYLE") or "storybook")
+    return key.lower() if key.lower() in PICTURE_STYLES else "storybook"
+
+
+def characters_in(story, text, most=3):
+    """Only the characters who are in this moment (a picture told about all twelve draws a crowd of look-alikes).
+    Falls back to the first two, the leads."""
+    chars = [c.strip() for c in re.split(r";\s*|\n+", story.get("characters", "") or "") if c.strip()]
+    if len(chars) <= most:
+        return "; ".join(chars)
+    text_l = (text or "").lower()
+    named = [c for c in chars if (n := re.split(r"[(:,–-]", c)[0].strip().lower()) and len(n) > 1
+             and re.search(r"\b" + re.escape(n.split()[0]) + r"\b", text_l)]
+    return "; ".join((named or chars[:2])[:most])
+
 SHOT_PLAN_PROMPT = """You are the illustrator of the story "{title}". Look of every picture: {style}.
 The characters always look like this: {characters}
 For each numbered scene below, describe ONE illustration of its most dramatic or telling moment: which characters
 are in it (by name), exactly what each is doing (a clear action, mid-movement: running, reaching, laughing,
-arguing, embracing), their expressions, where they are, and the light. One sentence of 25 to 45 words. Only
+arguing, shouting, pointing in anger, throwing a punch, grappling, embracing), their expressions, where they are,
+and the light. In a fight or an argument, show the clash itself, not the calm before or after. One sentence of 25 to 45 words. Only
 things a picture can show; no words or signs in the picture. {extra}
 Reply with ONLY JSON: {{"pictures": ["...", "..."]}} with exactly {n} entries, in order.
 
@@ -2217,7 +2287,9 @@ def plan_shots(cfg, story):
         listed = "\n\n".join(f"{k + 1}. {scenes[i].get('narration', '')[:1100]}" for k, i in enumerate(batch))
         try:
             got = ask_writer(cfg, SHOT_PLAN_PROMPT.format(
-                title=story.get("title", ""), style=story.get("visual_style") or DEFAULT_LOOK,
+                title=story.get("title", ""),
+                style=(story.get("visual_style") or DEFAULT_LOOK) if picture_style(story) == "storybook"
+                else PICTURE_STYLES[picture_style(story)]["look"],
                 characters=story.get("characters", ""), extra=extra, n=len(batch), scenes=listed), system=system,
                 think="fix")
             got = got.get("pictures") if isinstance(got, dict) else []
@@ -2239,10 +2311,12 @@ def shot_prompt(story, scene, kind, base=None, local=False):
     if level in ("young-kids", "kids"):
         tail += " Gentle, friendly and child-appropriate; nothing scary or violent."
     us = story.get("user_style") or {}
-    look = ". ".join(x for x in (us.get("pictures"), story.get("visual_style", "")) if x)
+    ps = PICTURE_STYLES[picture_style(story)]
+    look = ". ".join(x for x in (us.get("pictures"), story.get("visual_style", "") if ps["keep_writer_look"] else "",
+                                 "" if ps["keep_writer_look"] else ps["look"]) if x)
     if kind == "video" and us.get("video"):
         tail = f" Camera and motion: {us['video']}." + tail
-    chars = story.get("characters", "")
+    chars = characters_in(story, f"{base} {scene.get('narration', '')[:600]}") if local else story.get("characters", "")
     if level in ("mature", "explicit"):
         base, chars = picture_safe(base, level), picture_safe(chars, level)
         if len(base.split()) < 4:                             # nothing safe left: a calm moment from the scene itself
@@ -2251,27 +2325,93 @@ def shot_prompt(story, scene, kind, base=None, local=False):
             base = calm[0] if calm else ""
         if len(base.split()) < 4:                             # or the place and the mood
             base = picture_safe(f"{scene.get('heading', '')}, {story.get('logline', '')}", level) or "a quiet moment"
-        base = "Fully clothed adults, " + base.rstrip(" .") + ". Romantic, atmospheric, cinematic"
+        mood = "Tense, dramatic, cinematic" if CONFLICT.search(base) else "Atmospheric, cinematic"
+        base = "Fully clothed adults, " + base.rstrip(" .") + ". " + mood
     if local:          # picture apps read the start of a prompt most closely: the shot first, then who and the look
-        look = look or DEFAULT_LOOK
-        return f"{base.rstrip(' .')}. {ILLUSTRATE}. Characters: {chars}. {look}.{tail}"
+        look = look or ps["look"]
+        if CONFLICT.search(base) and story.get("level") not in ("young-kids", "kids"):
+            tail = (" Intense, dramatic action: bodies in motion, raw emotion on their faces, a dynamic camera angle."
+                    + tail)
+        return f"{base.rstrip(' .')}. {ps['shot']}. Characters: {chars}. {look}.{tail}"
     return f"Style: {look}. Characters: {chars}. Shot: {base}.{tail}"
 
 
 # ───────────────────────────── pictures ─────────────────────────────
 
-TASTEFUL = (" Tasteful, romantic and suggestive at most: fully clothed or covered, no nudity, nothing sexual shown. "
+TASTEFUL = (" Tasteful: fully clothed or covered, no nudity, nothing sexual shown. "
             "Every person is clearly an adult.")
 TASTEFUL_NEG = ("nude, nudity, naked, nsfw, explicit, sexual, nipples, genitals, underwear, lingerie, topless, "
                 "bare chest, cleavage, see-through, bikini, swimsuit, bed, sex, erotic, child, children, teen, "
-                "young-looking, minor, schoolgirl, loli")
+                "young-looking, minor, schoolgirl, loli, gore, dismemberment, mutilation")
 
 
-def local_image(cfg, prompt, w, h, out_path, level="family", seed=-1):
+# Settings that suit each kind of picture model. A fast "Turbo" model pushed with 24 steps and strong guidance comes
+# out over-cooked (garish colour, too much going on); a full model with 6 steps comes out muddy.
+MODEL_KINDS = [  # (words in the model's file name, kind, steps, guidance, (landscape width, height))
+    (("schnell",), "FLUX schnell", 4, 1.0, (1344, 768)),
+    (("turbo", "lightning", "hyper", "lcm", "dmd", "flash"), "fast (Turbo)", 6, 1.5, (1024, 576)),
+    (("flux",), "FLUX", 20, 3.5, (1344, 768)),
+    (("sd3", "sd_3", "stable_diffusion_3"), "SD 3", 28, 4.5, (1344, 768)),
+    (("xl", "juggernaut", "realvis", "pony", "illustrious", "noob", "dreamshaper", "playground"), "SDXL", 30, 5.5,
+     (1344, 768)),
+]
+_MODEL = {"name": None, "checked": 0.0}
+
+
+def local_model(cfg):
+    """The model the picture app has loaded (asked once every 10 minutes): Draw Things answers GET / with its
+    settings; Automatic1111/Forge answer /sdapi/v1/options."""
+    if cfg.get("LOCAL_IMAGE_MODEL"):
+        return cfg["LOCAL_IMAGE_MODEL"]
+    if _MODEL["name"] is not None and time.time() - _MODEL["checked"] < 600:
+        return _MODEL["name"]
+    base_url = (cfg.get("LOCAL_IMAGE_URL") or "").rstrip("/")
+    name = ""
+    for path, key in (("/", "model"), ("/sdapi/v1/options", "sd_model_checkpoint")):
+        try:
+            r = requests.get(base_url + path, timeout=5)
+            v = (r.json() or {}).get(key) if r.ok else None
+            if v:
+                name = str(v)
+                break
+        except (requests.RequestException, ValueError, AttributeError):
+            continue
+    _MODEL.update(name=name, checked=time.time())
+    return name
+
+
+def model_kind(name):
+    n = (name or "").lower()
+    for words, kind, steps, guidance, size in MODEL_KINDS:
+        if any(w in n for w in words):
+            return kind, steps, guidance, size
+    return ("SD 1.5", 28, 7.0, (912, 512)) if n else ("unknown", 24, 6.0, (1024, 576))
+
+
+def picture_settings(cfg):
+    """(steps, guidance) for the loaded model, unless storymaker.env sets them (LOCAL_IMAGE_STEPS / _CFG)."""
+    _, steps, guidance, _ = model_kind(local_model(cfg))
+    st, gd = str(cfg.get("LOCAL_IMAGE_STEPS") or "auto"), str(cfg.get("LOCAL_IMAGE_CFG") or "auto")
+    if (st, gd) in (("24", "6"), ("4", "1.5")):  # old defaults written into storymaker.env (one size for every
+        st = gd = "auto"                         # model; the second pair was for SDXL Turbo only)
+    return (int(st) if st.isdigit() else steps), (float(gd) if re.fullmatch(r"[\d.]+", gd) else guidance)
+
+
+def picture_size(cfg, portrait=False, square=False):
+    w, h = model_kind(local_model(cfg))[3]
+    if square:
+        side = 1024 if w >= 1024 else 768
+        return side, side
+    return (h, w) if portrait else (w, h)
+
+
+def local_image(cfg, prompt, w, h, out_path, level="family", seed=-1, style="storybook"):
     """A picture from the image app on your own computer (Draw Things, or Automatic1111/Forge):
     its txt2img API. Free and private. Grown-up stories only ever get tasteful pictures."""
     neg = ("text, letters, words, caption, title, speech bubble, watermark, signature, logo, blurry, deformed, extra "
-           "fingers, extra limbs, bad anatomy, empty scene")
+           "fingers, extra limbs, bad anatomy, empty scene, crowd of identical people, duplicate figures")
+    if PICTURE_STYLES.get(style, {}).get("neg"):
+        neg += ", " + PICTURE_STYLES[style]["neg"]
     avoid = (((cfg.get("_STYLE") or {}).get("pictures") or {}).get("avoid") or "").strip()
     if avoid:
         neg += ", " + _clip(avoid, 200)
@@ -2281,10 +2421,13 @@ def local_image(cfg, prompt, w, h, out_path, level="family", seed=-1):
     elif level in ("young-kids", "kids", "middle-grade", "family"):
         neg += ", scary, gore, violence"
     try:
-        r = requests.post(cfg["LOCAL_IMAGE_URL"].rstrip("/") + "/sdapi/v1/txt2img", timeout=900, json={
-            "prompt": prompt[:1500], "negative_prompt": neg, "width": w, "height": h,
-            "steps": int(cfg["LOCAL_IMAGE_STEPS"]), "cfg_scale": float(cfg["LOCAL_IMAGE_CFG"]), "seed": seed,
-            "batch_size": 1})
+        steps, guidance = picture_settings(cfg)
+        body = {"prompt": prompt[:1500], "negative_prompt": neg, "width": w, "height": h,
+                "steps": steps, "cfg_scale": guidance, "seed": seed, "batch_size": 1}
+        if cfg.get("LOCAL_IMAGE_MODEL"):           # a model of your choosing for StoryMaker's pictures
+            body["model"] = cfg["LOCAL_IMAGE_MODEL"]                          # Draw Things
+            body["override_settings"] = {"sd_model_checkpoint": cfg["LOCAL_IMAGE_MODEL"]}   # Automatic1111/Forge
+        r = requests.post(cfg["LOCAL_IMAGE_URL"].rstrip("/") + "/sdapi/v1/txt2img", timeout=900, json=body)
     except requests.ConnectionError:
         raise RuntimeError(f"Can't reach the picture app at {cfg['LOCAL_IMAGE_URL']}. In Draw Things, turn on "
                            "Settings → API Server (HTTP) and keep the app open.")
@@ -2303,14 +2446,18 @@ def make_cover(cfg, story, out_dir, level):
     if out.exists() or cfg.get("COVER_ART", "on") != "on" or pick_image_provider(cfg) != "local":
         return out if out.exists() else None
     raw = out_dir / ".cover.png"
-    look = ". ".join(x for x in ((story.get("user_style") or {}).get("pictures"), story.get("visual_style", "")) if x)
-    logline, chars = story.get("logline", ""), story.get("characters", "")
+    ps = PICTURE_STYLES[picture_style(story)]
+    look = ". ".join(x for x in ((story.get("user_style") or {}).get("pictures"),
+                                 story.get("visual_style", "") if ps["keep_writer_look"] else ps["look"]) if x)
+    logline = story.get("logline", "")
+    chars = characters_in(story, logline, most=2)                 # the leads, not the whole cast in a crowd
     if level in ("mature", "explicit"):
         logline, chars = picture_safe(logline, level), picture_safe(chars, level)
-    prompt = (f"Book cover art: {logline}. {look}. Characters: {chars}. "
-              "Beautiful, cinematic, evocative. No text, no title, no lettering.")
+    prompt = (f"Book cover: {chars}, {logline.rstrip(' .')}. A single striking moment, the main characters large in "
+              f"the frame. {look}. Beautiful, evocative. No text, no title, no lettering.")
     try:
-        local_image(cfg, prompt, 1024, 1024, raw, level, story_seed(story))
+        size = picture_size(cfg, square=True)
+        local_image(cfg, prompt, size[0], size[1], raw, level, story_seed(story), style=picture_style(story))
         Image.open(raw).convert("RGB").save(out, quality=90)
         return out
     except Exception as e:
@@ -2458,10 +2605,10 @@ def picture_for(cfg, story, i, w, h, portrait, job, provider, ref):
 def local_picture(cfg, story, prompt, portrait, raw, seed):
     """A picture from the picture app on this computer, with a second and third try (it may be busy or just
     opening). Raises if it still can't."""
-    lw, lh = (576, 1024) if portrait else (1024, 576)
+    lw, lh = picture_size(cfg, portrait)
     for attempt in range(3):
         try:
-            return local_image(cfg, prompt, lw, lh, raw, story.get("level", "family"), seed)
+            return local_image(cfg, prompt, lw, lh, raw, story.get("level", "family"), seed, style=picture_style(story))
         except Exception as e:
             if attempt == 2:
                 raise
@@ -2528,6 +2675,47 @@ def ollama_ready(cfg, timeout=6):
 # Mac apps StoryMaker can ask to be opened: the picture app and the local writer
 MAC_APPS = {"draw-things": "Draw Things", "ollama": "Ollama"}
 
+_OLLAMA_CHOICE = {}          # (main address, model) → (address, model, which, when): asked again after 5 minutes
+
+
+def _has_model(names, want):
+    return bool(names) and bool(want) and any(n == want or n.split(":")[0] == want.split(":")[0] for n in names)
+
+
+def pick_ollama(cfg, wake=True, fresh=False):
+    """Which Ollama writes: the Mac's (faster and better) when it's there, otherwise the backup on the server
+    (OLLAMA_FALLBACK_URL, with OLLAMA_FALLBACK_MODEL if it doesn't have the same model). Sets cfg's OLLAMA_URL and
+    OLLAMA_MODEL to the one picked and returns ("main" | "backup" | None, a few words for the checks)."""
+    main_url, want = cfg["OLLAMA_URL"], cfg["OLLAMA_MODEL"]
+    key = (cfg.get("_OLLAMA_MAIN") or main_url, want)
+    cfg.setdefault("_OLLAMA_MAIN", main_url)
+    hit = _OLLAMA_CHOICE.get(key)
+    if hit and not fresh and time.time() - hit[3] < 300:
+        cfg["OLLAMA_URL"], cfg["OLLAMA_MODEL"] = hit[0], hit[1]
+        return hit[2], hit[4]
+    main = {**cfg, "OLLAMA_URL": key[0]}
+    names = ollama_ready(main, timeout=4)
+    if names is None and wake:
+        open_mac_app(cfg, "ollama")                       # the Mac's Ollama may just be closed: ask the studio
+        names = ollama_ready(main)
+    choice = None
+    if _has_model(names, want):
+        choice = (key[0], want, "main", time.time(), f"Ollama is ready ({want})")
+    elif cfg.get("OLLAMA_FALLBACK_URL"):
+        back = {**cfg, "OLLAMA_URL": cfg["OLLAMA_FALLBACK_URL"]}
+        bnames = ollama_ready(back, timeout=4)
+        bwant = next((m for m in (want, cfg.get("OLLAMA_FALLBACK_MODEL")) if _has_model(bnames, m)), None)
+        if bwant:
+            why = "isn't answering" if names is None else f"doesn't have {want}"
+            choice = (cfg["OLLAMA_FALLBACK_URL"], bwant, "backup", time.time(),
+                      f"The Mac's Ollama {why}, so the backup Ollama on the server writes ({bwant}; slower)")
+            log(choice[4] + ".")
+    if not choice:
+        return None, ("Ollama isn't running" if names is None else f"Ollama doesn't have the model {want}")
+    _OLLAMA_CHOICE[key] = choice
+    cfg["OLLAMA_URL"], cfg["OLLAMA_MODEL"] = choice[0], choice[1]
+    return choice[2], choice[4]
+
 
 def open_mac_app(cfg, app):
     """Open Draw Things (or Ollama) when it's needed and closed. StoryMaker runs inside Docker and can't open Mac
@@ -2569,6 +2757,9 @@ def preflight(cfg, args, level, vprovider, auto=True):
     out = []
     add = lambda item, ok, detail, fix="", blocking=True: out.append(
         {"item": item, "ok": ok, "detail": detail, "fix": fix, "blocking": blocking and not ok})
+    if cfg.get("LIBRARY_CHECK_FILE") and not Path(cfg["LIBRARY_CHECK_FILE"]).exists():
+        add("Library", False, "The NAS isn't connected, so there's nowhere to save the story",
+            "Check the NAS is on. On the server: sudo mount -a   (then try again)")
     prov = cfg["STORY_PROVIDER"].lower()
     if prov == "demo":
         add("Writer", True, "demo writer")
@@ -2585,17 +2776,15 @@ def preflight(cfg, args, level, vprovider, auto=True):
             except requests.RequestException:
                 add("Writer", False, "Can't reach Groq", "Check the internet connection (and turn off the work VPN).")
     elif prov == "ollama":
-        names = ollama_ready(cfg)
-        if names is None and auto:
-            ok, what = open_mac_app(cfg, "ollama")
-            names = ollama_ready(cfg) if ok else None
+        which, what = pick_ollama(cfg, wake=auto, fresh=True)
         want = cfg["OLLAMA_MODEL"]
-        if names is None:
-            add("Writer", False, "Ollama isn't running", "Open the Ollama app on the Mac.")
-        elif not any(n == want or n.split(":")[0] == want.split(":")[0] for n in names):
-            add("Writer", False, f"Ollama doesn't have the model {want}", f"In Terminal: ollama pull {want}")
+        if which is None and what.startswith("Ollama isn't"):
+            add("Writer", False, what, "Open the Ollama app on the Mac" + (
+                " (and check the server's backup Ollama is running)." if cfg.get("OLLAMA_FALLBACK_URL") else "."))
+        elif which is None:
+            add("Writer", False, what, f"In Terminal on the Mac: ollama pull {want}")
         else:
-            add("Writer", True, f"Ollama is ready ({want})")
+            add("Writer", True, what)
     else:
         key = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(prov)
         add("Writer", bool(not key or cfg.get(key)), f"{prov} is set up" if not key or cfg.get(key) else f"No {key}",
@@ -2619,6 +2808,19 @@ def preflight(cfg, args, level, vprovider, auto=True):
                 ok, what = open_mac_app(cfg, "draw-things")
                 what = ("Draw Things wasn't open, so it was opened" if ok else what)
             add("Pictures", ok, what if ok else f"Draw Things isn't answering ({what})", DRAW_THINGS_FIX)
+            if ok:
+                model = local_model(cfg)
+                kind = model_kind(model)[0]
+                style = picture_style({"picture_style": getattr(args, "picture_style", None) or cfg.get("PICTURE_STYLE")})
+                fast = kind in ("fast (Turbo)", "FLUX schnell")
+                add("Picture model", True,
+                    f"{model or 'unknown model'} ({kind}) for {PICTURE_STYLES[style]['name'].lower().replace('3d', '3D')} pictures",
+                    ("This is a fast sketch model, so pictures won't look very real. For realistic pictures, download a "
+                     "realistic model in Draw Things (Juggernaut XL or RealVisXL from its model list) and select it."
+                     if fast and style != "storybook" else
+                     "StoryMaker couldn't tell which model Draw Things has loaded, so it uses middle-of-the-road "
+                     "settings. Put the model's file name in LOCAL_IMAGE_MODEL= in storymaker.env for the best ones."
+                     if not model else ""), blocking=False)
         elif ip == "cards":
             add("Pictures", False, "No picture app is set up, so the video would only have title cards",
                 "Set up Draw Things (free, on the Mac): " + DRAW_THINGS_FIX + " Then set LOCAL_IMAGE_URL in "
@@ -4502,7 +4704,9 @@ def notify(cfg, title, message, click=None, failed=False):
 
 
 def jobs_dir(cfg):
-    d = Path(os.path.expanduser(cfg["OUTPUT_DIR"])) / ".jobs"
+    """Stories being made. JOBS_DIR puts them on a fast local disk when the library is on a NAS."""
+    d = Path(os.path.expanduser(cfg.get("JOBS_DIR") or "")) if cfg.get("JOBS_DIR") else \
+        Path(os.path.expanduser(cfg["OUTPUT_DIR"])) / ".jobs"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -5381,12 +5585,14 @@ def rebuild_video(cfg, folder, story, final, timeline, job, redraw=False):
     return seg_lens
 
 
-def remaster_story(cfg, run_id, revoice=False, redesign=False, redraw=False):
+def remaster_story(cfg, run_id, revoice=False, redesign=False, redraw=False, style=None):
     """Make the audio again (and the video's sound) from the story as it is now: new or changed lines
     are recorded, the sound is designed and mixed again with your current sound files."""
     folder, story, result = load_story(cfg, run_id)
     level = result.get("level") or "family"
     story["level"] = level                     # pictures follow the story's level (grown-up ones stay tasteful)
+    if style and redraw:                       # drawn again in another look (Storybook, Realistic, Cinematic)
+        story["picture_style"] = picture_style({"picture_style": style})
     if level == "explicit":
         adult_config(cfg)
     mode = result.get("mode") or ("video" if result.get("video_file") else "audio")
@@ -5425,6 +5631,9 @@ def remaster_story(cfg, run_id, revoice=False, redesign=False, redraw=False):
                    "Putting the video together again with the new sound")
             rebuild_video(cfg, folder, story, final, timeline, job, redraw)
             (folder / "story.json").write_text(json.dumps(story, indent=2))
+        if redraw and style and (folder / "cover.jpg").exists():     # a new look gets a new cover too
+            (folder / "cover.jpg").unlink()
+            make_cover(cfg, story, folder, level)
         if redraw and (folder / "story-book.pdf").exists():
             report("finishing", 0.2, "Laying out the picture book with the new pictures")
             if mode != "video":
@@ -5620,7 +5829,10 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
         apply_media_style(cfg, story)
         if args.narrator and VOICE_SPEC.match(args.narrator):
             story["voice_choice"] = {"narrator": args.narrator, "characters": {}}
+        story["picture_style"] = picture_style({"picture_style": args.picture_style or cfg.get("PICTURE_STYLE")})
         story_file.write_text(json.dumps(story, indent=2))
+    if args.picture_style:                      # (carrying on: a style chosen now wins)
+        story["picture_style"] = picture_style({"picture_style": args.picture_style})
     n_sc = len(story["scenes"])
     n_ch = len(story.get("chapters") or [])
     report("writing", 1, f"Story written: {n_ch} chapters, {n_sc} scenes" if n_ch > 1 else
@@ -5636,6 +5848,7 @@ def _run_job(cfg, args, idea, scenes, vprovider, job_id, job, level, series, cli
                "chapters": args.chapters, "detail": args.detail, "keywords": ", ".join(story.get("keywords") or []),
                "sounds": story.get("sound_wishes", ""), "narrator": (story.get("voice_choice") or {}).get("narrator", ""),
                "portrait": args.portrait, "book": args.book, "series": series["name"] if series else "",
+               "picture_style": story.get("picture_style", "storybook"),
                **(story.get("prefs") or {})}
     result = {"ok": True, "job_id": job_id, "request": request, "title": story["title"], "logline": story.get("logline", ""),
               "level": level, "story": story_markdown(story, subtitle), "folder": str(out_dir)}
@@ -5862,6 +6075,8 @@ def main():
     ap.add_argument("--revoice", action="store_true", help="with --remaster: choose the character voices again")
     ap.add_argument("--redesign", action="store_true", help="with --remaster: choose the sounds again")
     ap.add_argument("--redraw", action="store_true", help="with --remaster: draw new pictures for the video and book")
+    ap.add_argument("--picture-style", choices=sorted(PICTURE_STYLES),
+                    help="how the pictures look: storybook, realistic or cinematic (default: PICTURE_STYLE setting)")
     ap.add_argument("--skip-checks", dest="skip_checks", action="store_true",
                     help="don't check the writer, voices and picture app before starting")
     ap.add_argument("--job-id", help=argparse.SUPPRESS)
@@ -6017,7 +6232,7 @@ def main():
             if args.rewrite:
                 out = rewrite_story(cfg, run_id, args.target, instructions or "", not args.no_remake, args.keywords)
             else:
-                out = remaster_story(cfg, run_id, args.revoice, args.redesign, args.redraw)
+                out = remaster_story(cfg, run_id, args.revoice, args.redesign, args.redraw, args.picture_style)
         except JobStopped:
             msg = ("Stopped. The story's sound and video may be half-made now: remake them when you're ready."
                    if not args.rewrite else "Stopped. The story wasn't changed.")
@@ -6142,14 +6357,20 @@ def main():
         log(str(e))
         print(json.dumps({"ok": False, "error": str(e)}))
         raise SystemExit(0)
-    except JobStopped:                                    # Stop pressed: what's written so far is kept to carry on
+    except JobStopped:                                    # Stop (or Pause) pressed: what's written so far is kept
         wrote = (job / "outline.json").exists() or (job / "story.json").exists() or any(job.glob("scene_c*_s*.txt"))
-        msg = ("Stopped. What was already made is kept: carry it on from Unfinished stories, or delete it there."
+        flag = jobs_dir(cfg) / f"{job_id}.pause"
+        paused = flag.exists() and wrote
+        flag.unlink(missing_ok=True)
+        msg = ("Paused. Everything made so far is kept: press Resume in Unfinished stories to carry on from here."
+               if paused else
+               "Stopped. What was already made is kept: carry it on from Unfinished stories, or delete it there."
                if wrote else "Stopped before anything was written. Nothing was kept or spent.")
         if not wrote:
             shutil.rmtree(job, ignore_errors=True)
         log(msg)
-        write_status(cfg, job_id, state="stopped", detail=msg, title=(_PROG.get("status") or {}).get("title"))
+        write_status(cfg, job_id, state="paused" if paused else "stopped", detail=msg,
+                     title=(_PROG.get("status") or {}).get("title"))
         print(json.dumps({"ok": False, "stopped": True, "error": msg}))
         raise SystemExit(0)
     except MinorContent as e:

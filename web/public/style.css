@@ -418,3 +418,43 @@ dialog#styleDlg { width: min(760px, calc(100vw - 32px)); }
 .confirm-start li { margin: 2px 0; }
 .confirm-start .cs-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .active-job .small-btn { justify-self: start; }
+
+.style-pick { display: flex; gap: 10px; align-items: center; margin: 4px 0 10px 28px; }
+.style-pick select { width: auto; }
+
+/* the NAS */
+.nas-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.nas-shelf { margin-top: 28px; }
+.nas-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; align-items: center; padding: 10px 0;
+  border-top: 1px solid var(--line, rgba(127,127,127,.25)); }
+.nas-item .nas-t { display: grid; gap: 2px; min-width: 0; }
+.nas-item .nas-t strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nas-item .settings-msg, .nas-item .job-meter { grid-column: 1 / -1; margin: 0; }
+.nas-item .settings-msg:empty { display: none; }
+.nas-panel .cleanup-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+
+/* phones: the top bar wraps instead of running off the edge */
+@media (max-width: 560px) {
+  .top { flex-wrap: wrap; row-gap: 10px; }
+  .top nav { flex-wrap: wrap; gap: 10px 16px; }
+}
+@media (max-width: 560px) {
+  main { padding-left: 16px; padding-right: 16px; }
+  .top { padding-left: 16px; padding-right: 16px; }
+  .studio { grid-template-columns: minmax(0, 1fr); }
+  .panel { padding: 18px 16px 20px; }
+}
+@media (max-width: 560px) { select { max-width: 100%; min-width: 0; } }
+
+.stop-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.stop-row #stopStory, .stop-row #pauseStory { margin-top: 0; width: auto; padding-left: 22px; padding-right: 22px; }
+.unfinished-row.paused .uf-why { color: var(--muted, inherit); }
+.aj-btns { display: flex; gap: 8px; }
+
+/* Stories | Archive */
+.lib-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--shelf); margin-right: auto; }
+.lib-tabs [role="tab"] { border: 0; background: transparent; color: inherit; padding: 6px 16px; border-radius: 999px; font: inherit; font-size: .92rem; cursor: pointer; }
+.lib-tabs [role="tab"][aria-selected="true"] { background: var(--lamp); color: var(--lamp-ink); font-weight: 600; }
+.lib-tabs [role="tab"]:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.unfinished.tab-hidden { display: none; }
+.nas-shelf { margin-top: 12px; }

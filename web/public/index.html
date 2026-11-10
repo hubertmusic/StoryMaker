@@ -149,6 +149,17 @@
         </div>
       </fieldset>
 
+      <fieldset class="field" id="pictureStyleRow">
+        <legend>Pictures</legend>
+        <div class="chips">
+          <label><input type="radio" name="pictureStyle" value="storybook" checked><span>Storybook</span></label>
+          <label><input type="radio" name="pictureStyle" value="realistic"><span>Realistic</span></label>
+          <label><input type="radio" name="pictureStyle" value="cinematic"><span>Cinematic</span></label>
+          <label><input type="radio" name="pictureStyle" value="3d"><span>3D animated</span></label>
+        </div>
+        <p class="hint" id="pictureStyleHint">Illustrated, like a picture book.</p>
+      </fieldset>
+
       <details class="more">
         <summary>More options</summary>
         <div class="row2">
@@ -230,7 +241,10 @@
           <div class="preview-strip" id="previewStrip"></div>
         </div>
         <p class="hint">You can close this page — it keeps going, and the finished story will be in your library.</p>
-        <button type="button" class="small-btn warn" id="stopStory" hidden>Stop</button>
+        <div class="stop-row">
+          <button type="button" class="small-btn" id="pauseStory" hidden>Pause</button>
+          <button type="button" class="small-btn warn" id="stopStory" hidden>Stop</button>
+        </div>
       </div>
 
       <div id="resultView" hidden></div>
@@ -241,12 +255,18 @@
   <section id="library" class="library">
     <div class="library-head">
       <h2>Library</h2>
+      <div class="lib-tabs" role="tablist" aria-label="Library">
+        <button type="button" role="tab" id="tabStories" aria-selected="true" aria-controls="shelf">Stories</button>
+        <button type="button" role="tab" id="tabArchive" aria-selected="false" aria-controls="nasShelf" hidden>Archive</button>
+      </div>
       <div class="library-tools">
         <button type="button" class="small-btn" id="cleanupAllBtn">Clean up the writing</button>
+        <button type="button" class="small-btn" id="nasBtn">Move to NAS</button>
         <select id="filter" aria-label="Show stories from"><option value="">All stories</option></select>
       </div>
     </div>
     <div class="cleanup-all" id="cleanupAll" hidden></div>
+    <div class="cleanup-all nas-panel" id="nasPanel" hidden></div>
     <div class="unfinished" id="unfinished" hidden>
       <h3>Unfinished</h3>
       <p class="hint">Stories that stopped before the end. What's already written is kept. <strong>Recover</strong> finishes it from where it stopped. Stories cut off by a restart carry on by themselves.</p>
@@ -254,6 +274,11 @@
     </div>
     <div class="shelf" id="shelf"></div>
     <p class="empty" id="shelfEmpty" hidden>No stories yet. Make your first one above.</p>
+    <div class="nas-shelf" id="nasShelf" role="tabpanel" aria-labelledby="tabArchive" hidden>
+      <p class="hint" id="nasShelfHint">Stories moved to the NAS to save space. <strong>Bring back</strong> puts one in your library again to watch, remake or send to Audio Studio; the NAS keeps its copy as the backup.</p>
+      <div id="nasList"></div>
+      <p class="empty" id="nasEmpty" hidden>Nothing in the archive yet. Move stories here with <strong>Move to NAS</strong>, or from a story's own buttons.</p>
+    </div>
   </section>
 </main>
 

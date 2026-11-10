@@ -10,6 +10,8 @@ studio/
 sounds/
 music/
 kokoro/
+local/
+.storymaker-on-server
 
 # Rebuilt by the installers
 audiostudio/venv/

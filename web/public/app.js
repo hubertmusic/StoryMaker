@@ -28,6 +28,7 @@ function formData() {
     video: $("video").value,
     writer: $("writer").value,
     portrait: $("portrait").checked,
+    pictureStyle: (document.querySelector('input[name="pictureStyle"]:checked') || {}).value,
     useStyle: $("useStyle").checked,
     proofread: $("proofread").checked,
     book: $("book").checked,
@@ -334,6 +335,7 @@ function poll(jobId, data) {
   clearInterval(polling);
   followingId = jobId;
   $("stopStory").hidden = false; $("stopStory").disabled = false; $("stopStory").textContent = "Stop";
+  $("pauseStory").hidden = false; $("pauseStory").disabled = false; $("pauseStory").textContent = "Pause";
   polling = setInterval(async () => {
     const st = await api(`/api/status/${jobId}`);
     if (st.state === "running" || st.state === "queued") {
@@ -345,22 +347,22 @@ function poll(jobId, data) {
       setMeter(100, "Done");
       clearInterval(polling);
       followingId = null;
-      $("stopStory").hidden = true;
+      $("stopStory").hidden = true; $("pauseStory").hidden = true;
       showResult(st.result);
       loadLibrary();
       loadSeries();
-    } else if (st.state === "stopped") {
+    } else if (st.state === "stopped" || st.state === "paused") {
       clearInterval(polling);
       followingId = null;
-      $("stopStory").hidden = true;
-      setMeter(st.progress || 0, "Stopped");
+      $("stopStory").hidden = true; $("pauseStory").hidden = true;
+      setMeter(st.progress || 0, st.state === "paused" ? "Paused" : "Stopped");
       show("progressView");
       showError(st.detail || "Stopped. What was already made is kept in Unfinished stories.");
       loadUnfinished();
     } else if (st.state === "failed") {
       clearInterval(polling);
       followingId = null;
-      $("stopStory").hidden = true;
+      $("stopStory").hidden = true; $("pauseStory").hidden = true;
       show("progressView");
       showError(`${st.error} Press Make it again to pick up where it stopped — nothing already made is paid for twice.`);
     }
@@ -368,6 +370,13 @@ function poll(jobId, data) {
 }
 $("stopStory").addEventListener("click", () => {
   if (followingId) stopJob(followingId, "making this story? What's already written is kept, and you can carry it on later", $("stopStory"));
+});
+// Pause: another story can be made now; this one waits in Unfinished stories with Resume
+$("pauseStory").addEventListener("click", async () => {
+  if (!followingId) return;
+  $("pauseStory").disabled = true; $("pauseStory").textContent = "Pausing…";
+  const r = await api(`/api/jobs/${followingId}/pause`, {});
+  if (!r.ok) { $("pauseStory").disabled = false; $("pauseStory").textContent = "Pause"; alert(r.error || "Couldn't pause it."); }
 });
 
 function mediaBlock(s) {
@@ -607,7 +616,35 @@ function storyTools(s, id, el) {
     window.open(`${base.replace(/\/$/, "")}/?import=${encodeURIComponent(id)}`, "_blank", "noopener");
   }));
   if (s.request) bar.append(btn("Make a new version", () => newVersion(s.request)));
+  if (!$("tabArchive").hidden) bar.append(btn("Move to archive", archivePanel));   // only when there's a NAS
   wrap.append(bar, area);
+
+  // this one story to the NAS archive (copied and checked before it's removed here)
+  function archivePanel() {
+    area.innerHTML = "";
+    const p = document.createElement("div"); p.className = "panel-tool";
+    const note = document.createElement("p"); note.className = "level-note";
+    note.textContent = "Moves this story to the NAS to free space here. It's copied and every file checked before it's removed from this computer. It then shows in the Archive tab, where Bring back returns it.";
+    const keepL = document.createElement("label"); keepL.className = "check";
+    const keep = document.createElement("input"); keep.type = "checkbox";
+    keepL.append(keep, document.createTextNode(" Keep it here too (just back it up)"));
+    const go = document.createElement("button"); go.type = "button"; go.className = "go"; go.textContent = "Move to archive";
+    const msg = document.createElement("p"); msg.className = "settings-msg";
+    keep.addEventListener("change", () => { go.textContent = keep.checked ? "Back up to the archive" : "Move to archive"; });
+    p.append(note, keepL, go, msg); area.appendChild(p);
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      const r = await api("/api/nas/archive", { ids: [id], keep: keep.checked });
+      if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
+      const m = jobMeter(); p.insertBefore(m, msg);
+      followNas(r.task, m, (st) => {
+        if ((st.failed || []).length) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = nasSummary(st, "moved"); return; }
+        msg.className = "settings-msg";
+        msg.textContent = keep.checked ? "Backed up to the archive." : "Moved to the archive. Find it in the Archive tab.";
+        setTimeout(() => { if (!keep.checked) { const v = document.getElementById("viewer"); if (v && v.close) v.close(); } loadLibrary(); }, 1500);
+      });
+    });
+  }
 
   async function editPanel() {
     area.innerHTML = "";
@@ -891,14 +928,23 @@ function storyTools(s, id, el) {
     const [vl, vc] = mk("Choose new character voices");
     const [sl, scb] = mk("Pick the sounds again");
     const [dl, dcb] = mk("Draw new pictures for the video and picture book (with Draw Things: the characters acting out each scene)");
+    // the look of the new pictures (starts at the story's own)
+    const styleRow = document.createElement("label"); styleRow.className = "field style-pick"; styleRow.hidden = true;
+    const styleSel = document.createElement("select");
+    for (const [v, t] of [["storybook", "Storybook (illustrated)"], ["realistic", "Realistic (like photographs)"], ["cinematic", "Cinematic (like a film)"], ["3d", "3D animated"]]) {
+      const o = document.createElement("option"); o.value = v; o.textContent = t; styleSel.appendChild(o);
+    }
+    styleSel.value = ((s.request || {}).picture_style) || "storybook";
+    styleRow.append(document.createTextNode("Picture style "), styleSel);
+    dcb.addEventListener("change", () => { styleRow.hidden = !dcb.checked; });
     const go = document.createElement("button"); go.className = "go"; go.type = "button"; go.textContent = "Remake the audio";
     const msg = document.createElement("p"); msg.className = "settings-msg";
-    p.append(vl, sl, ...(features.localPictures ? [dl] : []), go, msg);
+    p.append(vl, sl, ...(features.localPictures ? [dl, styleRow] : []), go, msg);
     area.appendChild(p);
     if (quick) p.querySelector(".level-note").textContent = "The text changed since the audio was made. Pick what to redo, then remake it: the changed lines are recorded and everything else is reused.";
     const start = async () => {
       go.disabled = true;
-      const r = await api(`/api/stories/${encodeURIComponent(id)}/remaster`, { revoice: vc.checked, redesign: scb.checked, redraw: dcb.checked });
+      const r = await api(`/api/stories/${encodeURIComponent(id)}/remaster`, { revoice: vc.checked, redesign: scb.checked, redraw: dcb.checked, pictureStyle: styleSel.value });
       if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
       const m = jobMeter(); p.appendChild(m);
       followJob(r.job_id, m, () => refreshCard(id, el), (err) => { msg.className = "settings-msg bad"; msg.textContent = err; go.disabled = false; }, "remaking the audio");
@@ -906,7 +952,7 @@ function storyTools(s, id, el) {
     go.addEventListener("click", () => confirmStart(p, go, "Ready to remake the audio:", [
       vc.checked ? "New voices are chosen for the characters" : "The same voices as before (only changed lines are recorded)",
       scb.checked ? "The sounds are picked again" : "The same sounds as before",
-      ...(features.localPictures ? [dcb.checked ? "New pictures are drawn for the video and picture book" : "The same pictures as before"] : []),
+      ...(features.localPictures ? [dcb.checked ? `New ${styleSel.options[styleSel.selectedIndex].text.split(" (")[0].toLowerCase().replace(/^3d/, "3D")} pictures are drawn for the video, picture book and cover` : "The same pictures as before"] : []),
     ], "Start the remake", start));
   }
   return wrap;
@@ -964,7 +1010,8 @@ async function loadUnfinished() {
     info.append(t, m, why);
     const acts = document.createElement("div"); acts.className = "uf-actions";
     const mk = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = label; b.addEventListener("click", fn); acts.appendChild(b); return b; };
-    if (u.canResume) mk("Recover", "small-btn go-small", async (e) => {
+    if (u.paused) { row.classList.add("paused"); why.textContent = "Paused. Everything made so far is kept."; }
+    if (u.canResume) mk(u.paused ? "Resume" : "Recover", "small-btn go-small", async (e) => {
       e.target.disabled = true;
       const rr = await api(`/api/jobs/${u.id}/resume`, {});
       e.target.disabled = false;
@@ -1022,6 +1069,7 @@ function cleanupSummary(st) {
     `sentence problems ${r.problems_before} → ${r.problems_after}.${failed}`;
 }
 async function cleanupAll() {
+  $("nasPanel").hidden = true;
   const box = $("cleanupAll");
   box.hidden = false; box.innerHTML = '<h3>Clean up the writing</h3><p class="hint">Checking every story…</p>';
   const r = await api("/api/writing-check");
@@ -1072,14 +1120,154 @@ async function cleanupAll() {
 }
 $("cleanupAllBtn").addEventListener("click", cleanupAll);
 
+// ───────────────────────────── the NAS ─────────────────────────────
+const gb = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round((n || 0) / 1e6))} MB`);
+const shortDate = (s) => { const d = new Date(String(s || "").replace(/_(\d\d)(\d\d)(\d\d)$/, "T$1:$2:$3")); return isNaN(d) ? "" : d.toLocaleDateString(); };
+// follow a NAS move: the meter fills, then done(task)
+function followNas(tid, meter, done) {
+  const t = setInterval(async () => {
+    const st = await api(`/api/nas/task/${tid}`);
+    if (st.ok === false && !st.state) { clearInterval(t); done({ state: "failed", failed: [{ error: st.error }] }); return; }
+    meter.set(st.progress || 0, st.detail || "");
+    if (["done", "failed", "partly"].includes(st.state)) { clearInterval(t); done(st); }
+  }, 1500);
+}
+function nasSummary(st, verb) {
+  const ok = (st.done || []).length, bad = st.failed || [];
+  return `${ok} ${verb}.` + (bad.length ? ` ${bad.length} couldn't be: ${bad.map((f) => `${f.label ? f.label + ": " : ""}${f.error}`).join(" ")}` : "");
+}
+async function nasPanel() {
+  const box = $("nasPanel");
+  if (!box.hidden) { box.hidden = true; return; }
+  $("cleanupAll").hidden = true;
+  box.hidden = false; box.innerHTML = '<p class="hint">Checking the NAS…</p>';
+  const [nas, cand] = await Promise.all([api("/api/nas"), api("/api/nas/candidates")]);
+  box.innerHTML = "";
+  const h = document.createElement("h3"); h.textContent = "Move stories to the NAS"; box.appendChild(h);
+  if (!nas.ok) {
+    const p = document.createElement("p"); p.className = "settings-msg bad"; p.textContent = nas.error || "The NAS isn't reachable.";
+    box.appendChild(p); return;
+  }
+  const intro = document.createElement("p"); intro.className = "hint";
+  intro.textContent = `Frees space on this computer. Each story is copied to the NAS and checked file by file; only then is it removed from here. Bring it back any time from On the NAS.${nas.free ? ` The NAS has ${gb(nas.free)} free.` : ""}`;
+  box.appendChild(intro);
+  const list = cand.stories || [];
+  if (!list.length) { const p = document.createElement("p"); p.textContent = "No stories on this computer to move."; box.appendChild(p); return; }
+  const tools = document.createElement("div"); tools.className = "cleanup-tools";
+  const all = document.createElement("button"); all.type = "button"; all.className = "small-btn"; all.textContent = "Select all";
+  const none = document.createElement("button"); none.type = "button"; none.className = "small-btn"; none.textContent = "Select none";
+  const total = document.createElement("span"); total.className = "hint";
+  tools.append(all, none, total); box.appendChild(tools);
+  const ul = document.createElement("div"); ul.className = "cleanup-list";
+  const boxes = list.map((st) => {
+    const l = document.createElement("label"); l.className = "check nas-row";
+    const c = document.createElement("input"); c.type = "checkbox"; c.value = st.id; c.disabled = st.busy; c.dataset.size = st.size;
+    const name = document.createElement("span"); name.textContent = st.title;
+    const info = document.createElement("span"); info.className = "hint";
+    info.textContent = st.busy ? "being worked on" : `${gb(st.size)} · ${shortDate(st.created)}${st.level ? ` · ${LEVEL_NAMES[st.level] || st.level}` : ""}`;
+    l.append(c, name, info); ul.appendChild(l); return c;
+  });
+  box.appendChild(ul);
+  const [kl, kc] = (() => { const l = document.createElement("label"); l.className = "check"; const c = document.createElement("input"); c.type = "checkbox"; l.append(c, document.createTextNode(" Keep a copy on this computer too (just back up, don't free the space)")); return [l, c]; })();
+  box.appendChild(kl);
+  const go = document.createElement("button"); go.type = "button"; go.className = "go"; go.textContent = "Move to the NAS";
+  const msg = document.createElement("p"); msg.className = "settings-msg";
+  box.append(go, msg);
+  const update = () => {
+    const picked = boxes.filter((c) => c.checked);
+    const size = picked.reduce((n, c) => n + Number(c.dataset.size || 0), 0);
+    total.textContent = picked.length ? `${picked.length} picked, ${gb(size)}` : "";
+    go.disabled = !picked.length;
+    go.textContent = kc.checked ? "Back up to the NAS" : "Move to the NAS";
+  };
+  boxes.forEach((c) => c.addEventListener("change", update)); kc.addEventListener("change", update);
+  all.addEventListener("click", () => { boxes.forEach((c) => { if (!c.disabled) c.checked = true; }); update(); });
+  none.addEventListener("click", () => { boxes.forEach((c) => { c.checked = false; }); update(); });
+  update();
+  go.addEventListener("click", () => {
+    const picked = boxes.filter((c) => c.checked);
+    const size = picked.reduce((n, c) => n + Number(c.dataset.size || 0), 0);
+    confirmStart(box, go, kc.checked ? `Ready to back up ${picked.length} stor${picked.length === 1 ? "y" : "ies"}:` : `Ready to move ${picked.length} stor${picked.length === 1 ? "y" : "ies"}:`, [
+      `${gb(size)} copied to the NAS, then every file checked`,
+      kc.checked ? "They stay on this computer too" : `Then removed from this computer, freeing ${gb(size)}`,
+      "Bring any of them back later from On the NAS",
+    ], kc.checked ? "Start the backup" : "Start moving", async () => {
+      go.disabled = true;
+      const r = await api("/api/nas/archive", { ids: picked.map((c) => c.value), keep: kc.checked });
+      if (!r.ok) { go.disabled = false; msg.className = "settings-msg bad"; msg.textContent = r.error; return; }
+      const m = jobMeter(); box.insertBefore(m, msg);
+      followNas(r.task, m, (st) => {
+        msg.className = st.failed && st.failed.length ? "settings-msg bad" : "settings-msg";
+        msg.textContent = nasSummary(st, kc.checked ? "backed up" : "moved to the NAS");
+        loadLibrary();
+      });
+    });
+  });
+}
+$("nasBtn").addEventListener("click", nasPanel);
+// Library tabs: Stories (with their covers) and Archive (what's on the NAS: a plain list)
+let libTab = "stories";
+try { if (localStorage.getItem("libTab") === "archive") libTab = "archive"; } catch { /* private window */ }
+function setLibTab(t) {
+  libTab = t === "archive" && !$("tabArchive").hidden ? "archive" : "stories";
+  try { localStorage.setItem("libTab", libTab); } catch { /* private window */ }
+  const arch = libTab === "archive";
+  $("tabStories").setAttribute("aria-selected", String(!arch)); $("tabArchive").setAttribute("aria-selected", String(arch));
+  $("shelf").hidden = arch; $("nasShelf").hidden = !arch;
+  $("shelfEmpty").hidden = arch || $("shelf").children.length > 0;
+  $("unfinished").classList.toggle("tab-hidden", arch);
+  $("filter").hidden = arch; $("cleanupAllBtn").hidden = arch;
+  if (arch) $("cleanupAll").hidden = true;
+}
+$("tabStories").addEventListener("click", () => setLibTab("stories"));
+$("tabArchive").addEventListener("click", () => setLibTab("archive"));
+async function loadNas() {
+  const r = await api("/api/nas");
+  const list = $("nasList");
+  $("nasBtn").hidden = r.configured === false;
+  $("tabArchive").hidden = r.configured === false;
+  const away = (r.items || []).filter((it) => !it.onComputer);
+  $("tabArchive").textContent = away.length ? `Archive (${away.length})` : "Archive";
+  setLibTab(libTab);
+  if (!r.ok && r.configured !== false) {
+    list.innerHTML = ""; $("nasEmpty").hidden = true;
+    $("nasShelfHint").textContent = `${r.error || "Can't reach the NAS right now."} Your stories there are safe; they'll show again once it's back.`;
+    return;
+  }
+  $("nasEmpty").hidden = away.length > 0;
+  list.innerHTML = "";
+  for (const it of away) {
+    const row = document.createElement("div"); row.className = "nas-item";
+    const t = document.createElement("div"); t.className = "nas-t";
+    const name = document.createElement("strong"); name.textContent = it.title;
+    const info = document.createElement("span"); info.className = "hint";
+    info.textContent = `${it.mode === "video" ? "Video" : it.mode === "audio" ? "Audio" : "Story"} · ${gb(it.size)} · moved ${shortDate(it.archived)}${it.level ? ` · ${LEVEL_NAMES[it.level] || it.level}` : ""}${it.by ? ` · by ${it.by}` : ""}`;
+    t.append(name, info);
+    const back = document.createElement("button"); back.type = "button"; back.className = "small-btn"; back.textContent = "Bring back";
+    const msg = document.createElement("p"); msg.className = "settings-msg";
+    back.addEventListener("click", async () => {
+      back.disabled = true;
+      const res = await api("/api/nas/restore", { ids: [it.id] });
+      if (!res.ok) { back.disabled = false; msg.className = "settings-msg bad"; msg.textContent = res.error; return; }
+      const m = jobMeter(); row.appendChild(m);
+      followNas(res.task, m, (st) => {
+        if (st.failed && st.failed.length) { back.disabled = false; msg.className = "settings-msg bad"; msg.textContent = nasSummary(st, "brought back"); return; }
+        msg.className = "settings-msg"; msg.textContent = "Back in your library (Stories)."; setTimeout(loadLibrary, 1200);
+      });
+    });
+    row.append(t, back, msg); list.appendChild(row);
+  }
+}
+
 async function loadLibrary() {
   loadUnfinished();
+  loadNas();
   const r = await api("/api/stories");
   const filter = $("filter").value;
   const shelf = $("shelf");
   shelf.innerHTML = "";
   const list = (r.stories || []).filter((s) => !filter || s.series === filter);
-  $("shelfEmpty").hidden = list.length > 0;
+  $("shelfEmpty").hidden = list.length > 0 || libTab === "archive";
   for (const s of list) {
     const b = document.createElement("button");
     b.className = "cover"; b.type = "button";
@@ -1140,6 +1328,25 @@ function updateLength() {
 $("scenes").addEventListener("input", updateLength);
 $("chapters").addEventListener("change", updateLength);
 document.querySelectorAll('input[name="detail"], input[name="mode"]').forEach((r) => r.addEventListener("change", updateLength));
+// Pictures: only when something gets drawn (a video, or a picture book)
+const PICTURE_HINTS = { storybook: "Illustrated, like a picture book.",
+  realistic: "Like photographs of real people and places. Best with a realistic model in Draw Things (see the checks).",
+  cinematic: "Like stills from a film: real people, dramatic light. Best with a realistic model in Draw Things.",
+  "3d": "Like a 3D animated film: rendered characters, soft light, rich colour." };
+function updatePictureStyle() {
+  const mode = (document.querySelector('input[name="mode"]:checked') || {}).value;
+  $("pictureStyleRow").hidden = !(mode === "video" || $("book").checked);
+  const v = (document.querySelector('input[name="pictureStyle"]:checked') || {}).value || "storybook";
+  $("pictureStyleHint").textContent = PICTURE_HINTS[v];
+  try { localStorage.setItem("pictureStyle", v); } catch { /* private window */ }
+}
+try {
+  const saved = localStorage.getItem("pictureStyle");
+  const r = saved && document.querySelector(`input[name="pictureStyle"][value="${saved}"]`);
+  if (r) r.checked = true;
+} catch { /* private window */ }
+document.querySelectorAll('input[name="mode"], input[name="pictureStyle"], #book').forEach((r) => r.addEventListener("change", updatePictureStyle));
+updatePictureStyle();
 
 updateLength();
 loadMe();
@@ -1186,7 +1393,17 @@ async function checkActive() {
     det.textContent = `${j.progress || 0}%${j.detail ? ` · ${j.detail}` : ""}`;
     const stop = document.createElement("button"); stop.type = "button"; stop.className = "small-btn warn"; stop.textContent = "Stop";
     stop.addEventListener("click", async () => { if (await stopJob(j.id, (JOB_NAMES[j.kind] || "this").toLowerCase(), stop)) setTimeout(checkActive, 3000); });
-    row.append(what, bar, det, stop);
+    const btns = document.createElement("div"); btns.className = "aj-btns";
+    if (!j.kind || j.kind === "make") {
+      const pause = document.createElement("button"); pause.type = "button"; pause.className = "small-btn"; pause.textContent = "Pause";
+      pause.addEventListener("click", async () => {
+        pause.disabled = true; pause.textContent = "Pausing…";
+        await api(`/api/jobs/${j.id}/pause`, {}); setTimeout(() => { checkActive(); loadUnfinished(); }, 3000);
+      });
+      btns.appendChild(pause);
+    }
+    btns.appendChild(stop);
+    row.append(what, bar, det, btns);
     return row;
   }));
   box.hidden = !others.length;

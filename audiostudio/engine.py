@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "2.8 (Nov 6)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "3.1 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -59,6 +59,8 @@ STUDIO_DEFAULTS = {
     "STORYMAKER_PUBLIC_URL": "",                  # the StoryMaker link on the page (blank: same address, port 8095)
     "STORYMAKER_OUTPUT": "",                      # StoryMaker's library folder (blank: the one in storymaker.env)
     "GUTENDEX_URL": "https://gutendex.com",       # search for free (public-domain) books from Project Gutenberg
+    "ARCHIVE_DIR": "",                            # the NAS share as this computer sees it, e.g. /Volumes/StoryMaker
+    "NAS_URL": "",                                # mount it when it isn't connected, e.g. smb://192.168.1.50/StoryMaker
     "DRAW_THINGS_ALWAYS_ON": "on",                # turn Draw Things' API Server back on whenever it goes off
     "DRAW_THINGS_REOPEN": "on",                   # …and open Draw Things again if it's been quit
 }
@@ -1470,6 +1472,9 @@ def read_status(d):
         return {}
 
 
+JOB_KINDS = ("cast", "sounds", "record", "all", "tidy", "video")
+
+
 def write_status(d, **kw):
     st = read_status(d)
     st.update(kw, updated=time.strftime("%Y-%m-%dT%H:%M:%S"), pid=os.getpid())
@@ -1486,6 +1491,7 @@ class Worker:
         self.queue = []
         self.cv = threading.Condition()
         self.stop_flags = {}
+        self.pause_flags = {}
         self.current = None
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -1498,12 +1504,32 @@ class Worker:
             elif waiting:
                 raise ValueError("This book already has a job waiting.")
             self.queue.append((pid, kind, kw))
-            write_status(d, state="queued", job=kind, progress=0, detail="Waiting its turn", error=None)
+            self.pause_flags.pop(pid, None)
+            write_status(d, state="queued", job=kind, progress=0, detail="Waiting its turn", error=None, resume=None)
             self.cv.notify()
 
-    def stop(self, pid):
+    def pause(self, pid):
+        """Pause this book's job so another book gets the studio now; Resume carries on where it stopped (what's
+        recorded is kept). A waiting job is paused straight away; a running one as soon as it can stop."""
+        d = project_dir(self.cfg, pid)
+        with self.cv:
+            waiting = next((j for j in self.queue if j[0] == pid), None)
+            if waiting:
+                self.queue.remove(waiting)
+                write_status(d, state="paused", detail="Paused before it started. Resume when you're ready.",
+                             resume={"kind": waiting[1], "kw": waiting[2]})
+                return "paused"
+        if self.current == pid:
+            self.pause_flags[pid] = True
+            self.stop(pid, pausing=True)
+            return "pausing"
+        return "idle"
+
+    def stop(self, pid, pausing=False):
         """Stop this book's job: a waiting one is taken off the list; a running one stops at once if it's
         recording with Chatterbox (the line being read is abandoned), otherwise at the end of the step it's on."""
+        if not pausing:
+            self.pause_flags.pop(pid, None)
         self.stop_flags[pid] = True
         with self.cv:
             self.queue = [j for j in self.queue if j[0] != pid]
@@ -1548,11 +1574,11 @@ class Worker:
                 self._run(d, pid, kind, kw, progress)
                 break
             except StopJob:
-                write_status(d, state="stopped", detail="Stopped. Start again to carry on where it left off.")
+                self._stopped(d, pid, kind, kw)
                 break
             except Exception as e:
                 if self.stop_flags.get(pid):            # it broke because it was being stopped
-                    write_status(d, state="stopped", detail="Stopped. Start again to carry on where it left off.")
+                    self._stopped(d, pid, kind, kw)
                     break
                 traceback.print_exc()
                 memory = re.search(r"out of memory|stopped unexpectedly|MPS|Metal|killed", str(e), re.I)
@@ -1569,6 +1595,13 @@ class Worker:
                 write_status(d, state="failed", error=str(e)[:400],
                              detail="Something went wrong. Start again to carry on where it left off.")
                 break
+
+    def _stopped(self, d, pid, kind, kw):
+        if self.pause_flags.pop(pid, None):
+            write_status(d, state="paused", detail="Paused. What's done is kept: Resume carries on from here.",
+                         resume={"kind": kind, "kw": kw})
+        else:
+            write_status(d, state="stopped", detail="Stopped. Start again to carry on where it left off.")
 
     def _run(self, d, pid, kind, kw, progress):
         write_status(d, state="running", job=kind, progress=0, detail="Starting", error=None)
@@ -1807,7 +1840,9 @@ def build_book(cfg, d, p):
     if not (out / "cover.jpg").exists():
         try:
             sm.make_cover(writer_cfg(cfg, p["level"]), {"title": p["title"], "logline": p.get("logline", ""),
-                                                         "visual_style": "", "characters": ""}, out, p["level"])
+                                                         "visual_style": "", "picture_style": sm.picture_style(p),
+                                                         "characters": (p.get("look") or {}).get("characters", "")},
+                          out, p["level"])
         except Exception as e:
             log(f"Cover skipped ({e})")
     sm.make_audiobook(story, mp3, timeline, out, "", 1)
@@ -2260,16 +2295,26 @@ def run_video(cfg, pid, progress=lambda f, t: None):
         raise ValueError("Record the whole book first: the pictures are timed to the reading.")
     p = plan_pictures(cfg, pid, progress)
     secs = book_scenes(p)
-    story = {"title": p["title"], "level": p["level"], "logline": p.get("logline", ""),
+    style = sm.picture_style(p)
+    story = {"title": p["title"], "level": p["level"], "logline": p.get("logline", ""), "picture_style": style,
              "visual_style": p["look"]["visual_style"], "characters": p["look"]["characters"],
              "user_style": p.get("user_style") or {}, "cast": [{"name": c["name"]} for c in p.get("cast") or []],
              "scenes": [{"heading": next(ch["title"] for ch in p["chapters"] if sec in ch["sections"]),
                          "narration": sec["text"], "image_prompt": sec.get("image_prompt", ""), "shot_planned": True}
                         for sec in secs]}
     pics_dir = d / "pictures"
+    if p.get("pictures_style", "storybook") != style:         # a new look: every picture is drawn again
+        shutil.rmtree(pics_dir, ignore_errors=True)
+        (d / "out" / "cover.jpg").unlink(missing_ok=True)
     pics_dir.mkdir(exist_ok=True)
     src = p.get("source") or {}
-    if src.get("type") == "storymaker":                      # StoryMaker's own pictures, where it has them
+    sm_style = "storybook"
+    if src.get("type") == "storymaker":
+        try:
+            sm_style = sm.picture_style(json.loads((Path(cfg["SM_LIBRARY"]) / src["id"] / "story.json").read_text()))
+        except (OSError, ValueError):
+            pass
+    if src.get("type") == "storymaker" and sm_style == style:   # StoryMaker's own pictures, if they're in this look
         folder = Path(cfg["SM_LIBRARY"]) / src["id"]
         for f_ in folder.glob("scene_*.png"):
             if not (pics_dir / f_.name.replace("scene_", "pic_")).exists():
@@ -2307,4 +2352,5 @@ def run_video(cfg, pid, progress=lambda f, t: None):
         shutil.rmtree(work, ignore_errors=True)
     d, p, s = load_project(cfg, pid)
     p["video_made"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    p["pictures_style"] = style
     save_project(d, p)

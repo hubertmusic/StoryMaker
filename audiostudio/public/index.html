@@ -30,7 +30,14 @@
           <label><input type="radio" name="src" value="file"> A file</label>
           <label><input type="radio" name="src" value="paste"> Paste</label>
           <label><input type="radio" name="src" value="free"> Free book</label>
+          <label id="srcNasChoice" hidden><input type="radio" name="src" value="nas"> The NAS</label>
         </fieldset>
+
+        <div id="srcNas" class="field" hidden>
+          <label for="nasStory">StoryMaker story on the NAS</label>
+          <select id="nasStory"><option value="">Looking on the NAS…</option></select>
+          <p class="hint">It's copied back into StoryMaker's library first (the NAS keeps its copy), then brought in here.</p>
+        </div>
 
         <div id="srcSm" class="field">
           <label for="smStory">Story</label>
@@ -81,8 +88,21 @@
       </form>
 
       <section class="shelf-wrap" aria-labelledby="booksH">
-        <h2 id="booksH" class="panel-h">Your audiobooks</h2>
-        <div id="books" class="books"></div>
+        <div class="shelf-head">
+          <h2 id="booksH" class="panel-h">Your audiobooks</h2>
+          <div class="lib-tabs" role="tablist" aria-label="Your audiobooks" id="libTabs" hidden>
+            <button type="button" role="tab" id="tabBooks" aria-selected="true" aria-controls="books">Audiobooks</button>
+            <button type="button" role="tab" id="tabArchive" aria-selected="false" aria-controls="nasBooks">Archive</button>
+          </div>
+          <button type="button" class="quiet" id="nasMoveBtn" hidden>Move to NAS</button>
+        </div>
+        <div id="nasMove" class="nas-move" hidden></div>
+        <div id="books" class="books" role="tabpanel" aria-labelledby="tabBooks"></div>
+        <div id="nasBooks" class="nas-books" role="tabpanel" aria-labelledby="tabArchive" hidden>
+          <p class="hint" id="nasBooksHint">Books moved to the NAS to save space. Bring one back to listen, change or remake it; the NAS keeps its copy.</p>
+          <div id="nasBookList"></div>
+          <p class="hint" id="nasBooksEmpty" hidden>Nothing in the archive yet. Use Move to NAS, or Move to archive at the bottom of a book's page.</p>
+        </div>
       </section>
     </div>
   </section>
@@ -103,6 +123,8 @@
       </div>
       <div class="runbar-buttons">
         <button type="button" class="go" id="makeAll">Make the audiobook</button>
+        <button type="button" class="quiet" id="pauseJob" hidden>Pause</button>
+        <button type="button" class="go" id="resumeJob" hidden>Resume</button>
         <button type="button" class="quiet" id="stopJob" hidden>Stop</button>
       </div>
     </div>
@@ -192,6 +214,8 @@
     </section>
 
     <div class="danger">
+      <button type="button" class="quiet" id="archiveBook" hidden>Move to archive</button>
+      <span id="archiveNote" class="hint" role="status"></span>
       <button type="button" class="small-btn warn" id="deleteBook">Delete this audiobook</button>
       <span id="deleteConfirm" hidden>Delete it and every recording? <button type="button" class="delete" id="deleteYes">Delete</button> <button type="button" class="quiet" id="deleteNo">Keep it</button></span>
     </div>
@@ -239,6 +263,15 @@
     <label class="check" id="mkSoundsRow"><input type="checkbox" id="mkSounds"> Background sounds and effects</label>
     <label class="check"><input type="checkbox" id="mkMusic"> Background music</label>
     <label class="check" id="mkVideoRow"><input type="checkbox" id="mkVideo"> Then draw pictures and make a video</label>
+    <div class="field mk-style" id="mkStyleRow" hidden>
+      <label for="mkStyle">Picture style</label>
+      <select id="mkStyle">
+        <option value="storybook">Storybook (illustrated)</option>
+        <option value="realistic">Realistic (like photographs)</option>
+        <option value="cinematic">Cinematic (like a film)</option>
+        <option value="3d">3D animated</option>
+      </select>
+    </div>
   </fieldset>
   <ul class="mk-plan" id="mkPlan"></ul>
   <div class="mk-buttons">

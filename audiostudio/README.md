@@ -113,6 +113,20 @@ To have it start by itself whenever the Mac starts, run `./autostart.sh`. To sto
 
 The first Chatterbox recording downloads its voice model, which is a few GB, one time only.
 
+## The NAS
+
+Set `ARCHIVE_DIR` (the NAS share as the Mac sees it, e.g. `/Volumes/StoryMaker`) and `NAS_URL`
+(`smb://<NAS address>/StoryMaker`) in `studio.env`. Then **Move to NAS** beside *Your audiobooks* moves books off
+this computer (copied and checked file by file before anything is removed), **On the NAS** brings them back, and
+*Bring in a book* → **The NAS** pulls a StoryMaker story from the NAS straight into the studio. The studio also
+does the moving for StoryMaker's **Move to NAS**, so keep it running. See StoryMaker's README, section 22.
+
+## Picture style
+
+*Before it starts* and the Listen tab's video both have a **Picture style**: Storybook, Realistic, Cinematic or 3D animated.
+Changing it draws every picture again in the new look. For realistic pictures, pick a realistic model in Draw
+Things (Juggernaut XL or RealVisXL); StoryMaker's README, section 21, has the details.
+
 ## Choices first, and Stop
 
 Bringing a book in never starts anything. **Make the audiobook** (or **Make it again**) opens *Before it starts*:

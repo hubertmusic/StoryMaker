@@ -5,7 +5,11 @@
 cd "$(dirname "$0")"
 LABEL=com.storymaker.audiostudio
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && sleep 2     # let the old one finish stopping
+SVC="gui/$(id -u)/$LABEL"
+if launchctl print "$SVC" >/dev/null 2>&1; then
+  launchctl bootout "$SVC" 2>/dev/null || true
+  for i in $(seq 1 20); do launchctl print "$SVC" >/dev/null 2>&1 || break; sleep 1; done   # let it finish stopping
+fi
 if [ "$1" = "off" ]; then rm -f "$PLIST"; echo "Audio Studio won't start by itself any more."; exit 0; fi
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/StoryMaker/studio"
 cat > "$PLIST" <<PL
@@ -23,9 +27,13 @@ cat > "$PLIST" <<PL
   <key>StandardErrorPath</key><string>$HOME/StoryMaker/studio/studio.log</string>
 </dict></plist>
 PL
-if ! launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
+started=""
+for i in 1 2 3 4 5; do
+  if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then started=1; break; fi
+  # still registered from before (the Mac hadn't finished stopping it): restart that one instead
+  if launchctl print "$SVC" >/dev/null 2>&1 && launchctl kickstart -k "$SVC" 2>/dev/null; then started=1; break; fi
   sleep 3
-  launchctl bootstrap "gui/$(id -u)" "$PLIST" || { echo "Couldn't start it. Run ./autostart.sh again in a moment."; exit 1; }
-fi
+done
+[ -n "$started" ] || { echo "Couldn't start it. Run this in a moment:  bash ~/StoryMaker/audiostudio/autostart.sh"; exit 1; }
 echo "Audio Studio will start by itself from now on (a few minutes after the Mac starts, so logging in stays quick)."
 echo "Its log: ~/StoryMaker/studio/studio.log"

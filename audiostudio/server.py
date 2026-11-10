@@ -7,6 +7,7 @@ Sign-in is StoryMaker's: same user names, passwords and grown-up settings.
 
 import json
 import os
+import threading
 import re
 import shutil
 import socket
@@ -19,6 +20,7 @@ import uvicorn
 from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
+import archive as NAS
 import drawthings as DT
 import engine as E
 
@@ -33,13 +35,42 @@ worker = E.Worker(cfg)
 # StoryMaker can ask: it reads this secret from its own library folder (which only the two apps share).
 import secrets as _secrets
 HELPER_TOKEN = _secrets.token_hex(24)
-try:
-    _tok = Path(cfg["SM_LIBRARY"]) / ".helper-token"
-    _tok.parent.mkdir(parents=True, exist_ok=True)
-    _tok.write_text(HELPER_TOKEN)
-    os.chmod(_tok, 0o600)
-except OSError as _e:
-    E.log(f"Couldn't share the helper key with StoryMaker ({_e}); it won't be able to open Draw Things by itself.")
+
+
+def share_helper_key(quiet=False):
+    """Leave the key in StoryMaker's library, where StoryMaker (here, or on the server) reads it. Returns True if
+    it's there."""
+    try:
+        tok = Path(cfg["SM_LIBRARY"]) / ".helper-token"
+        if tok.exists() and tok.read_text().strip() == HELPER_TOKEN:
+            return True
+        if str(tok.parent).startswith("/Volumes/") and not tok.parent.parent.is_dir():
+            raise OSError("the NAS isn't connected")
+        tok.parent.mkdir(parents=True, exist_ok=True)
+        tok.write_text(HELPER_TOKEN)
+        os.chmod(tok, 0o600)
+        return True
+    except OSError as e:
+        if not quiet:
+            E.log(f"Couldn't share the helper key with StoryMaker yet ({e}); trying again every minute.")
+        return False
+
+
+def keep_connected():
+    """The library and the archive may be on the NAS: reconnect it if it drops (Mac asleep, NAS restarted), and
+    share the helper key again once it's back."""
+    while True:
+        try:
+            if cfg.get("NAS_URL") and not Path(os.path.expanduser(str(cfg.get("ARCHIVE_DIR") or "/nonexistent"))).is_dir():
+                NAS._mount(cfg["NAS_URL"])
+            share_helper_key(quiet=True)
+        except Exception as e:
+            E.log(f"NAS keeper: {e}")
+        time.sleep(60)
+
+
+share_helper_key()
+threading.Thread(target=keep_connected, daemon=True, name="nas-keeper").start()
 
 def alive(pid):
     try:
@@ -392,6 +423,133 @@ def helper_open(body: dict = Body(...), x_helper_token: str = Header("")):
     return {"ok": ok, "detail": detail}
 
 
+# ───────────────────────── the NAS archive ─────────────────────────
+# StoryMaker asks for its stories to be moved (it checks who may see and move what); the studio's own books are
+# moved from the studio's page.
+
+def helper_ok(token):
+    if not token or not _secrets.compare_digest(token, HELPER_TOKEN):
+        raise HTTPException(403, "Not allowed.")
+
+
+@app.get("/api/helper/nas")
+def helper_nas(x_helper_token: str = Header("")):
+    helper_ok(x_helper_token)
+    st = NAS.status(cfg)
+    return {**st, "items": NAS.listing(cfg, "storymaker") if st["ok"] else []}
+
+
+@app.post("/api/helper/nas/archive")
+def helper_nas_archive(body: dict = Body(...), x_helper_token: str = Header("")):
+    """{items: [{id, title, level, owner, owner_name, …}], keep: false}"""
+    helper_ok(x_helper_token)
+    items = [i for i in (body.get("items") or []) if isinstance(i, dict) and NAS.SAFE_ID.fullmatch(str(i.get("id", "")))]
+    if not items:
+        raise HTTPException(400, "Nothing to move.")
+    keep = bool(body.get("keep"))
+    steps = [(i.get("title") or i["id"], lambda prog, i=i: NAS.archive_one(cfg, "storymaker", i["id"], i, keep, prog))
+             for i in items]
+    return {"ok": True, "task": NAS.start("archive", steps)}
+
+
+@app.post("/api/helper/nas/restore")
+def helper_nas_restore(body: dict = Body(...), x_helper_token: str = Header("")):
+    helper_ok(x_helper_token)
+    ids = [str(x) for x in (body.get("ids") or []) if NAS.SAFE_ID.fullmatch(str(x))]
+    if not ids:
+        raise HTTPException(400, "Nothing to bring back.")
+    steps = [(x, lambda prog, x=x: NAS.restore_one(cfg, "storymaker", x, prog)) for x in ids]
+    return {"ok": True, "task": NAS.start("restore", steps)}
+
+
+@app.get("/api/helper/nas/task/{tid}")
+def helper_nas_task(tid: str, x_helper_token: str = Header("")):
+    helper_ok(x_helper_token)
+    t = NAS.task(tid)
+    if not t:
+        raise HTTPException(404, "No such task.")
+    return {"ok": True, **t}
+
+
+@app.get("/api/nas")
+def nas_books(user=Depends(current_user)):
+    """The studio's books on the NAS that you may see, and the NAS's state."""
+    st = NAS.status(cfg)
+    books = []
+    if st["ok"]:
+        for b in NAS.listing(cfg, "studio"):
+            if can_use(user, {"owner": b.get("owner"), "level": b.get("level") or "family"}):
+                books.append(b)
+    return {**{k: v for k, v in st.items() if k != "where"}, "books": books}
+
+
+@app.get("/api/nas/candidates")
+def nas_candidates(user=Depends(current_user)):
+    """Your books on this computer, with their size, for moving to the NAS."""
+    out = []
+    for b in E.list_projects(cfg):
+        if can_use(user, b):
+            d = E.studio_dir(cfg) / "projects" / b["id"]
+            out.append({"id": b["id"], "title": b["title"], "level": b["level"], "created": b.get("created"),
+                        "size": NAS.size_of(d), "busy": b.get("state") in ("running", "queued"),
+                        "has_book": b.get("has_book")})
+    return {"ok": True, "books": out}
+
+
+@app.post("/api/nas/archive")
+def nas_archive(body: dict = Body(...), user=Depends(current_user)):
+    """Move the studio books you pick to the NAS (keep: true backs them up and keeps them here too)."""
+    steps = []
+    for pid in [str(x) for x in (body.get("ids") or [])][:200]:
+        d, p, _ = E.load_project(cfg, pid)
+        if not can_use(user, p):
+            raise HTTPException(404, "Unknown book.")
+        if E.read_status(d).get("state") in ("running", "queued"):
+            raise HTTPException(409, f"“{p['title']}” is being worked on. Stop it first, or wait until it's done.")
+        meta = {"title": p["title"], "level": p["level"], "owner": p.get("owner"), "owner_name": user["username"],
+                "created": p.get("created"), "logline": p.get("logline", "")}
+        steps.append((p["title"], lambda prog, pid=pid, meta=meta: NAS.archive_one(cfg, "studio", pid, meta,
+                                                                                bool(body.get("keep")), prog)))
+    if not steps:
+        raise HTTPException(400, "Pick at least one book.")
+    return {"ok": True, "task": NAS.start("archive", steps)}
+
+
+@app.post("/api/nas/restore")
+def nas_restore(body: dict = Body(...), user=Depends(current_user)):
+    allowed = {b["id"] for b in nas_books(user)["books"]}
+    ids = [str(x) for x in (body.get("ids") or []) if str(x) in allowed]
+    if not ids:
+        raise HTTPException(400, "Pick at least one book on the NAS.")
+    return {"ok": True, "task": NAS.start("restore", [(x, lambda prog, x=x: NAS.restore_one(cfg, "studio", x, prog))
+                                                      for x in ids])}
+
+
+@app.get("/api/nas/task/{tid}")
+def nas_task(tid: str, user=Depends(current_user)):
+    t = NAS.task(tid)
+    if not t:
+        raise HTTPException(404, "No such task.")
+    return {"ok": True, **t}
+
+
+@app.get("/api/nas/storymaker")
+def nas_sm_stories(user=Depends(current_user)):
+    """StoryMaker stories on the NAS that you may see (StoryMaker decides who sees what)."""
+    r = sm_get(user["token"], "/api/nas", timeout=30)
+    if r.status_code != 200:
+        raise HTTPException(502, "StoryMaker couldn't list the NAS.")
+    return r.json()
+
+
+@app.post("/api/nas/storymaker/restore")
+def nas_sm_restore(body: dict = Body(...), user=Depends(current_user)):
+    """Bring a StoryMaker story back from the NAS (through StoryMaker, which checks it's yours)."""
+    r = requests.post(SM + "/api/nas/restore", cookies={"sm_session": user["token"]},
+                      json={"ids": [str(body.get("id", ""))]}, timeout=30)
+    return r.json()
+
+
 @app.get("/api/drawthings")
 def drawthings_status(user=Depends(current_user)):
     return DT.status(cfg)
@@ -441,6 +599,7 @@ def project(pid: str, user=Depends(current_user)):
     return {"ok": True, "id": pid, "title": p["title"], "level": p["level"], "engine": p.get("engine"),
             "voiceModel": p.get("voice_model") or cfg.get("CHATTERBOX_MODEL", "standard"), "acting": p.get("acting", 1.0),
             "music": p.get("music", "on"), "soundscapes": p.get("soundscapes", "on"),
+            "pictureStyle": E.sm.picture_style(p),
             "soundsAvailable": cfg.get("SOUNDSCAPES", "on").lower() == "on",
             "narrator": p.get("narrator"), "cast": p["cast"], "castDone": p.get("cast_done", False),
             "soundsDone": p.get("sounds_done", False), "soundWishes": p.get("sound_wishes", ""),
@@ -471,6 +630,8 @@ def settings(pid: str, body: dict = Body(...), user=Depends(current_user)):
         p["music"] = body["music"]
     if body.get("soundscapes") in ("on", "off"):
         p["soundscapes"] = body["soundscapes"]
+    if body.get("pictureStyle") in E.sm.PICTURE_STYLES:
+        p["picture_style"] = body["pictureStyle"]
     if "narrator" in body:
         n = str(body.get("narrator") or "")
         if n == "" or n.startswith("kokoro:") or n in {v["id"] for v in E.voice_library(cfg)}:
@@ -525,7 +686,7 @@ def sounds(pid: str, body: dict = Body(...), user=Depends(current_user)):
 def job(pid: str, body: dict = Body(...), user=Depends(current_user)):
     d, p, s = project_for(user, pid)
     kind = body.get("kind")
-    if kind not in ("cast", "sounds", "record", "all", "tidy", "video"):
+    if kind not in E.JOB_KINDS:
         raise HTTPException(400, "Unknown job.")
     kw = {}
     if kind == "tidy":
@@ -553,6 +714,25 @@ def stop(pid: str, user=Depends(current_user)):
     d = E.project_dir(cfg, pid)
     if E.read_status(d).get("state") == "queued":
         E.write_status(d, state="stopped", detail="Stopped before it started.")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/pause")
+def pause(pid: str, user=Depends(current_user)):
+    """Pause so another book can have the studio now; Resume picks up where it stopped."""
+    project_for(user, pid)
+    return {"ok": True, "state": worker.pause(pid)}
+
+
+@app.post("/api/projects/{pid}/resume")
+def resume(pid: str, user=Depends(current_user)):
+    project_for(user, pid)
+    d = E.project_dir(cfg, pid)
+    st = E.read_status(d)
+    job = st.get("resume") or {}
+    if st.get("state") != "paused" or job.get("kind") not in E.JOB_KINDS:
+        raise HTTPException(400, "That book isn't paused.")
+    worker.submit(pid, job["kind"], **(job.get("kw") or {}))
     return {"ok": True}
 
 

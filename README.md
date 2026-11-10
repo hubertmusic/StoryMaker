@@ -765,3 +765,119 @@ Groq also counts the longest reply StoryMaker *allows* against that 8,000, so ea
 a fair amount for each scene, briefly for spelling and sentence fixes. If an answer is ever cut off because it
 thought too long, that request is asked again with a little less thinking.
 
+## 21. Better, more realistic pictures
+
+Each story picks how its pictures look, under **Pictures** on the make form (when it makes a video or a picture
+book): **Storybook** (illustrated), **Realistic** (like photographs), **Cinematic** (like stills from a film) or
+**3D animated** (like a 3D animated film).
+**Remake → Draw new pictures** can redraw an existing story in another look (with a new cover), and Audio Studio
+has the same choice for its videos.
+
+- **Use a realistic model for realistic pictures.** SDXL Turbo is a fast sketch model. In Draw Things, open the
+  model list, download a realistic model (Juggernaut XL or RealVisXL work well on a 16 GB Mac mini) and select
+  it. The checks before a story starts say which model is loaded and warn when it's a sketch model.
+- **Settings follow the model.** StoryMaker asks Draw Things which model is loaded and uses steps, guidance and
+  size that suit it (Turbo: 6 steps, low guidance; full SDXL: 30 steps at 1344×768). Set
+  `LOCAL_IMAGE_STEPS` / `LOCAL_IMAGE_CFG` to numbers to choose yourself, or `LOCAL_IMAGE_MODEL` to the model's
+  file name to always use one model for StoryMaker.
+- **Fights and arguments look like fights and arguments.** Scenes with punches, shouting, pointing, struggling
+  or chases are drawn as the clash itself, with intense action and emotion. Grown-up stories' pictures stay
+  tasteful (fully clothed, nothing sexual, no gore), but action words like *pinned*, *slammed against the wall*,
+  *sweating* or *panting* are no longer cut out of them.
+- **Only who's in the moment is drawn** (the characters named in that scene, or the two leads on the cover),
+  instead of the whole cast in every picture.
+- **Draw Things keeps a copy of every picture** in its own project history. StoryMaker already saves every
+  picture in the story's folder, so you can delete old projects in Draw Things' **Projects** tab whenever it
+  gets big.
+
+## 22. The NAS: free up space, bring stories back
+
+Stories (and Audio Studio books) can be moved to the TerraMaster NAS and brought back whenever you want to
+watch, remake or record them again.
+
+**Set it up once (on the Mac):**
+1. On the NAS (TOS): make a shared folder, e.g. `StoryMaker`, with SMB turned on and a user who can read and write.
+2. On the Mac: Finder → **Go → Connect to Server** → `smb://<NAS address>/StoryMaker`, sign in, and tick
+   **Remember this password in my keychain**.
+3. In `~/StoryMaker/audiostudio/studio.env`:
+   ```
+   ARCHIVE_DIR=/Volumes/StoryMaker
+   NAS_URL=smb://<NAS address>/StoryMaker
+   ```
+   then run the update (or restart Audio Studio). If the Mac asks whether Python may use files on a network
+   volume, say **Allow**.
+
+**Using it:**
+- StoryMaker → Library → **Move to NAS**: pick stories (sizes shown), optionally *keep a copy here too* (backup
+  only). Each story is copied, every file is checked on the NAS, and only then is it removed from the Mac. If
+  anything doesn't match, nothing is removed.
+- **On the NAS** (under the library) lists what's there: **Bring back** copies it home again (the NAS keeps its
+  copy as the backup). Then remake it, or send it to Audio Studio as usual.
+- Audio Studio: **Move to NAS** beside *Your audiobooks*, and **On the NAS** below them. To bring a StoryMaker
+  story from the NAS straight into the studio: *Bring in a book* → **The NAS**.
+- Audio Studio does the copying (it runs on the Mac, where the share is connected), so it needs to be running.
+  If the NAS is off, the lists say so; nothing is lost.
+
+**Moving the apps to the server later:** connect the same NAS share on the server and set `ARCHIVE_DIR` to
+where it appears there (`NAS_URL` is only for the Mac). Everything on the NAS shows up on the server's apps and
+can be brought back there; whose story it is travels with it.
+
+## 23. StoryMaker on the server (the OptiPlex), the Mac as the workshop
+
+StoryMaker can run on the Linux server while the Mac keeps what needs the Mac: **Draw Things**, **Ollama** (the
+better writer) and **Audio Studio** with Chatterbox. The story library lives on the **NAS**, where both reach it.
+
+```
+ OptiPlex (Linux)                      Mac mini                           NAS
+ StoryMaker in Docker  ── asks ──▶  Draw Things :7860                ┌─ library/   (every story)
+   database, work folders            Ollama :11434 (first choice)     ├─ sounds/, music/
+   backup Ollama (Mac off)           Audio Studio :8096 (+ Chatterbox) └─ StoryMaker Archive/
+        └──────────── both read and write the library on the NAS ───────┘
+```
+
+**Move it (from the Mac):**
+1. The NAS share is connected on the Mac (section 22), and you can `ssh` to the server.
+2. StoryMaker.zip (this version) is in Downloads, and the update has been run on the Mac.
+3. Run:
+   ```bash
+   bash ~/StoryMaker/mac/move-to-server.sh
+   ```
+   It asks for the server's address and your user there, then:
+   - pauses StoryMaker on the Mac, and **copies** every story to `NAS/library` (each file checked; a second run
+     skips what's already there). Your sounds and music go too.
+   - sends your settings, accounts and unfinished stories to the server over SSH (not via the NAS), and runs
+     the server's setup there. It asks for the NAS's address and login, and whether to install a backup Ollama.
+   - lets the server use the Mac's Ollama (it listens on the network from now on) and asks you to set Draw
+     Things' **API Server → IP** to the one that isn't "localhost only".
+   - points Audio Studio at the server and the NAS library, and switches StoryMaker on the Mac off for good.
+4. Open StoryMaker at `http://<server>:8095` and update the Apple Shortcut and bookmarks to it.
+5. Once a few stories open and play from the server, free up the Mac's space with the `rm -rf` line the script
+   prints. Nothing on the Mac is deleted before that.
+
+**How it behaves afterwards:**
+- **Writing:** the Mac's Ollama first (faster, better stories). If the Mac is off, asleep or its Ollama isn't
+  answering, the server's backup Ollama writes instead (slower), even partway through a story. The checks before
+  a story say which one it's using.
+- **Pictures:** Draw Things on the Mac, opened and switched on by Audio Studio when it's needed.
+- **If the NAS is off,** StoryMaker won't start a story (the checks say so) rather than saving it in the wrong place.
+- **Updating:** run `bash ~/StoryMaker/update.sh` on the Mac (Audio Studio) **and** on the server (StoryMaker) with
+  the same zip (copy it to the server's Downloads, or `~/storymaker-move/`). On the Mac the update no longer
+  starts StoryMaker.
+- **The server's settings** are in `~/StoryMaker/storymaker.env` there: `OLLAMA_URL`, `LOCAL_IMAGE_URL` and
+  `STUDIO_HELPER_URL` point at the Mac, and `OLLAMA_FALLBACK_URL` at the server's own Ollama.
+- **Security:** Ollama and Draw Things now listen on the network with no password. Fine on a home network and
+  Tailscale. Don't forward their ports on the router.
+
+## 24. Archive tabs, and Pause / Resume
+
+**Archive tab (both apps).** Stories and books moved to the NAS leave the main shelf and show only in **Archive**:
+a plain list (title, size, date moved, level) with **Bring back** on each. Move things there with **Move to NAS**
+(several at once), from a story's own buttons (**Move to archive**), or at the bottom of a studio book's page.
+
+**Pause.** While a story is being made (StoryMaker) or a book recorded (Audio Studio), **Pause** stops it and keeps
+everything done so far, so another story or book can go first. Resume carries on from where it stopped:
+- StoryMaker: the story waits in *Unfinished stories* marked **Paused**, with **Resume**.
+- Audio Studio: the book shows **Paused** with **Resume** on its page and in the library. Recording pauses at once
+  (with Chatterbox the line being read is dropped and read again on Resume); other steps finish the step they're
+  on first. A paused book still resumes after the studio or the Mac restarts.
+

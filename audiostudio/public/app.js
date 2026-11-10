@@ -127,11 +127,13 @@ async function showHome() {
   $("book").hidden = true; $("home").hidden = false;
   document.title = "Audio Studio";
   const [p, s] = await Promise.all([api("/api/projects"), api("/api/storymaker/stories")]);
+  loadNasBooks();
   const books = $("books");
   books.replaceChildren();
   if (!(p.projects || []).length) books.append(el("p", { class: "empty", text: "Nothing here yet. Bring in a story from StoryMaker or a book file, and it will show up here." }));
   for (const b of p.projects || []) {
     const pill = b.state === "running" || b.state === "queued" ? el("span", { class: "pill live", text: b.state === "queued" ? "Waiting" : "Working" })
+      : b.state === "paused" ? el("span", { class: "pill paused", text: "Paused" })
       : b.has_book ? el("span", { class: "pill done", text: "Audiobook ready" })
       : b.state === "failed" ? el("span", { class: "pill bad", text: "Stopped by a problem" })
       : el("span", { class: "pill", text: b.cast_done ? "Cast" : "New" });
@@ -141,6 +143,12 @@ async function showHome() {
         el("div", { class: "m", text: `${b.chapters} chapter${b.chapters === 1 ? "" : "s"} · ${Number(b.words || 0).toLocaleString()} words · ${LEVEL_NAMES[b.level] || b.level}` })),
       pill);
     if (b.state === "running" || b.state === "queued") {
+      const pause = el("button", { type: "button", class: "quiet", text: "Pause", "aria-label": `Pause ${b.title}` });
+      pause.onclick = async () => {
+        pause.disabled = true; pause.textContent = "Pausing…";
+        await api(`/api/projects/${b.id}/pause`, { method: "POST" });
+        setTimeout(showHome, 2500);
+      };
       const stop = el("button", { type: "button", class: "quiet stop-row", text: "Stop", "aria-label": `Stop ${b.title}` });
       stop.onclick = async () => {
         if (!confirm(`Stop working on “${b.title}”? What's recorded so far is kept: start again to carry on.`)) return;
@@ -148,7 +156,16 @@ async function showHome() {
         await api(`/api/projects/${b.id}/stop`, { method: "POST" });
         setTimeout(showHome, 2500);
       };
-      books.append(el("div", { class: "book-line" }, row, stop));
+      books.append(el("div", { class: "book-line two" }, row, pause, stop));
+    } else if (b.state === "paused") {
+      const resume = el("button", { type: "button", class: "quiet resume-row", text: "Resume", "aria-label": `Resume ${b.title}` });
+      resume.onclick = async () => {
+        resume.disabled = true; resume.textContent = "Resuming…";
+        const r = await api(`/api/projects/${b.id}/resume`, { method: "POST" });
+        if (!r.ok) { resume.disabled = false; resume.textContent = "Resume"; alert(r.error || "Couldn't resume."); return; }
+        setTimeout(showHome, 1200);
+      };
+      books.append(el("div", { class: "book-line" }, row, resume));
     } else books.append(row);
   }
   const sel = $("smStory");
@@ -163,11 +180,12 @@ async function showHome() {
 document.querySelectorAll("input[name=src]").forEach((r) => r.addEventListener("change", () => {
   const v = document.querySelector("input[name=src]:checked").value;
   $("srcSm").hidden = v !== "sm"; $("srcFile").hidden = v !== "file"; $("srcPaste").hidden = v !== "paste";
-  $("srcFree").hidden = v !== "free";
-  $("titleRow").hidden = v === "sm" || v === "free";
-  $("levelRow").hidden = v === "sm";
+  $("srcFree").hidden = v !== "free"; $("srcNas").hidden = v !== "nas";
+  $("titleRow").hidden = v === "sm" || v === "free" || v === "nas";
+  $("levelRow").hidden = v === "sm" || v === "nas";
   // StoryMaker stories were proofread when they were written; a book or a PDF is cleaned up unless you say not to
-  $("cleanUp").checked = v !== "sm";
+  $("cleanUp").checked = v !== "sm" && v !== "nas";
+  if (v === "nas") loadNasStories();
 }));
 $("cleanUp").checked = document.querySelector("input[name=src]:checked").value !== "sm";
 
@@ -216,6 +234,19 @@ $("importForm").addEventListener("submit", async (e) => {
   if (src === "sm") {
     if (!$("smStory").value) { showError("Pick a story first."); r = null; }
     else r = await api("/api/import/storymaker", { json: { id: $("smStory").value, clean } });
+  } else if (src === "nas") {
+    const id = $("nasStory").value;
+    if (!id) { showError("Pick a story on the NAS first."); r = null; }
+    else {
+      $("importGo").textContent = "Copying it back from the NAS…";
+      const back = await api("/api/nas/storymaker/restore", { json: { id } });
+      if (!back.ok) r = back;
+      else {
+        const st = await waitNas(back.task, (t) => { $("importGo").textContent = `Copying it back from the NAS… ${t.progress || 0}%`; });
+        if (st.state !== "done") r = { ok: false, error: (st.failed && st.failed[0] && st.failed[0].error) || "It couldn't be copied back." };
+        else { $("importGo").textContent = "Bringing it in…"; r = await api("/api/import/storymaker", { json: { id, clean } }); }
+      }
+    }
   } else if (src === "free") {
     if (!pickedBook) { showError("Search for a book and pick one first."); r = null; }
     else { $("importGo").textContent = "Downloading the book…"; r = await api("/api/import/gutenberg", { json: { id: pickedBook.id, level, clean } }); }
@@ -237,6 +268,121 @@ $("importForm").addEventListener("submit", async (e) => {
   location.hash = `b=${r.id}`;
 });
 
+// ───────────────────────── the NAS ─────────────────────────
+const gb = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round((n || 0) / 1e6))} MB`);
+const day = (s) => { const d = new Date(s || ""); return isNaN(d) ? "" : d.toLocaleDateString(); };
+function waitNas(tid, onTick) {
+  return new Promise((resolve) => {
+    const t = setInterval(async () => {
+      const st = await api(`/api/nas/task/${tid}`);
+      if (!st.ok && !st.state) { clearInterval(t); resolve({ state: "failed", failed: [{ error: st.error }] }); return; }
+      if (onTick) onTick(st);
+      if (["done", "failed", "partly"].includes(st.state)) { clearInterval(t); resolve(st); }
+    }, 1500);
+  });
+}
+async function loadNasStories() {
+  const sel = $("nasStory");
+  const r = await api("/api/nas/storymaker");
+  sel.replaceChildren();
+  const away = (r.items || []).filter((it) => !it.onComputer);
+  if (!r.ok) sel.append(el("option", { value: "", text: r.error || "Can't reach the NAS right now" }));
+  else if (!away.length) sel.append(el("option", { value: "", text: "No StoryMaker stories on the NAS" }));
+  else for (const it of away) sel.append(el("option", { value: it.id, text: `${it.title} · ${gb(it.size)}` }));
+}
+// Audiobooks | Archive (the books on the NAS, as a plain list)
+let shelfTab = "books";
+try { if (localStorage.getItem("shelfTab") === "archive") shelfTab = "archive"; } catch { /* private window */ }
+let nasReady = false;
+function setShelfTab(t) {
+  shelfTab = t === "archive" && nasReady ? "archive" : "books";
+  try { localStorage.setItem("shelfTab", shelfTab); } catch { /* private window */ }
+  const arch = shelfTab === "archive";
+  $("tabBooks").setAttribute("aria-selected", String(!arch)); $("tabArchive").setAttribute("aria-selected", String(arch));
+  $("books").hidden = arch; $("nasBooks").hidden = !arch;
+}
+$("tabBooks").onclick = () => setShelfTab("books");
+$("tabArchive").onclick = () => setShelfTab("archive");
+async function loadNasBooks() {
+  const r = await api("/api/nas");
+  nasReady = r.configured !== false;
+  $("srcNasChoice").hidden = !nasReady;
+  $("nasMoveBtn").hidden = !nasReady;
+  $("libTabs").hidden = !nasReady;
+  const list = $("nasBookList");
+  if (!r.ok) {
+    setShelfTab(shelfTab);
+    list.replaceChildren(); $("nasBooksEmpty").hidden = true;
+    $("nasBooksHint").textContent = `${r.error || "Can't reach the NAS right now."} Books there are safe; they'll show again once it's back.`;
+    return;
+  }
+  const away = (r.books || []).filter((b) => !b.on_computer);
+  $("tabArchive").textContent = away.length ? `Archive (${away.length})` : "Archive";
+  $("nasBooksEmpty").hidden = away.length > 0;
+  setShelfTab(shelfTab);
+  list.replaceChildren(...away.map((b) => {
+    const msg = el("p", { class: "hint" });
+    const back = el("button", { type: "button", class: "quiet", text: "Bring back" });
+    const row = el("div", { class: "nas-book" },
+      el("span", { class: "nb-t" }, el("strong", { text: b.title }),
+        el("span", { class: "hint", text: `${gb(b.size)} · moved ${day(b.archived)} · ${LEVEL_NAMES[b.level] || b.level || ""}` })),
+      back, msg);
+    back.onclick = async () => {
+      back.disabled = true; back.textContent = "Bringing it back…";
+      const res = await api("/api/nas/restore", { json: { ids: [b.id] } });
+      if (!res.ok) { back.disabled = false; back.textContent = "Bring back"; msg.textContent = res.error; return; }
+      const st = await waitNas(res.task, (t) => { back.textContent = `Bringing it back… ${t.progress || 0}%`; });
+      if (st.state === "done") showHome();
+      else { back.disabled = false; back.textContent = "Bring back"; msg.textContent = (st.failed[0] || {}).error || "It couldn't be brought back."; }
+    };
+    return row;
+  }));
+}
+$("nasMoveBtn").onclick = async () => {
+  const box = $("nasMove");
+  if (!box.hidden) { box.hidden = true; return; }
+  box.hidden = false;
+  box.replaceChildren(el("p", { class: "hint", text: "Checking the NAS…" }));
+  const [nas, c] = await Promise.all([api("/api/nas"), api("/api/nas/candidates")]);
+  if (!nas.ok) { box.replaceChildren(el("p", { class: "error", text: nas.error || "The NAS isn't reachable." })); return; }
+  const list = c.books || [];
+  const total = el("span", { class: "hint" });
+  const keep = el("input", { type: "checkbox" });
+  const go = el("button", { type: "button", class: "go", text: "Move to the NAS" });
+  const msg = el("p", { class: "hint", role: "status" });
+  const boxes = list.map((b) => el("input", { type: "checkbox", value: b.id, disabled: b.busy, "data-size": b.size }));
+  const update = () => {
+    const picked = boxes.filter((x) => x.checked);
+    const size = picked.reduce((n, x) => n + Number(x.dataset.size || 0), 0);
+    total.textContent = picked.length ? `${picked.length} picked, ${gb(size)}` : "";
+    go.disabled = !picked.length;
+    go.textContent = keep.checked ? "Back up to the NAS" : "Move to the NAS";
+  };
+  boxes.forEach((x) => x.addEventListener("change", update)); keep.addEventListener("change", update);
+  box.replaceChildren(
+    el("p", { class: "hint", text: `Frees space on this computer. Each book is copied to the NAS and checked file by file, and only then removed from here.${nas.free ? ` The NAS has ${gb(nas.free)} free.` : ""}` }),
+    ...(list.length ? list.map((b, i) => el("label", { class: "check nas-pick" }, boxes[i], el("span", { text: b.title }),
+      el("span", { class: "hint", text: b.busy ? "being worked on" : `${gb(b.size)}${b.has_book ? " · audiobook ready" : ""}` })))
+      : [el("p", { text: "No books on this computer to move." })]),
+    el("label", { class: "check" }, keep, " Keep a copy on this computer too (just back up)"),
+    el("div", { class: "nas-go" }, go, total), msg);
+  update();
+  go.onclick = async () => {
+    const picked = boxes.filter((x) => x.checked);
+    const size = picked.reduce((n, x) => n + Number(x.dataset.size || 0), 0);
+    const what = `${picked.length} book${picked.length === 1 ? "" : "s"} (${gb(size)})`;
+    if (!confirm(keep.checked ? `Back up ${what} to the NAS? They stay here too.`
+      : `Move ${what} to the NAS? Each one is removed from this computer once it's safely copied and checked.`)) return;
+    go.disabled = true;
+    const r = await api("/api/nas/archive", { json: { ids: picked.map((x) => x.value), keep: keep.checked } });
+    if (!r.ok) { go.disabled = false; msg.textContent = r.error; return; }
+    const st = await waitNas(r.task, (t) => { msg.textContent = `${t.progress || 0}% · ${t.detail || ""}`; });
+    msg.textContent = `${(st.done || []).length} ${keep.checked ? "backed up" : "moved"}.` +
+      ((st.failed || []).length ? ` ${(st.failed || []).length} couldn't be: ${st.failed.map((f) => `${f.label}: ${f.error}`).join(" ")}` : "");
+    showHome();
+  };
+};
+
 // ───────────────────────── one book ─────────────────────────
 async function openBook(id, t) {
   const r = await api(`/api/projects/${id}`);
@@ -247,6 +393,8 @@ async function openBook(id, t) {
   $("home").hidden = true; $("book").hidden = false;
   document.title = `${book.title} · Audio Studio`;
   $("bTitle").textContent = book.title;
+  $("archiveBook").hidden = !nasReady; $("archiveBook").disabled = false; $("archiveNote").textContent = "";
+  if (!nasReady) api("/api/nas").then((n) => { nasReady = n.configured !== false; $("archiveBook").hidden = !nasReady; });
   const talkers = book.cast.filter((c) => c.lines > 0).length;
   $("bMeta").textContent = `${book.chapters.length} chapter${book.chapters.length === 1 ? "" : "s"} · ${Number(book.words).toLocaleString()} words`
     + (book.castDone ? ` · ${talkers} speaking part${talkers === 1 ? "" : "s"} and the narrator` : "")
@@ -278,14 +426,18 @@ function renderRun(st) {
   st = st || {};
   const busy = ["running", "queued"].includes(st.state);
   document.body.classList.toggle("on-air", busy && (st.job === "record" || st.job === "all"));
-  $("makeAll").disabled = busy; $("stopJob").hidden = !busy;
-  if (!busy) { $("stopJob").disabled = false; $("stopJob").textContent = "Stop"; }
+  const paused = st.state === "paused";
+  $("makeAll").disabled = busy; $("makeAll").hidden = paused;
+  $("stopJob").hidden = !busy; $("pauseJob").hidden = !busy; $("resumeJob").hidden = !paused;
+  if (!busy) { $("stopJob").disabled = false; $("stopJob").textContent = "Stop"; $("pauseJob").disabled = false; $("pauseJob").textContent = "Pause"; }
+  if (!paused) { $("resumeJob").disabled = false; $("resumeJob").textContent = "Resume"; }
   $("runMeterWrap").hidden = !busy;
   $("runMeter").style.width = `${st.progress || 0}%`;
   let state, detail = st.detail || "";
   if (busy) state = `${JOBS[st.job] || "Working"}… ${st.state === "running" ? `${st.progress || 0}%` : ""}`;
   else if (st.state === "failed") { state = "Stopped by a problem."; detail = `${st.error || ""} Press the button again to carry on.`; }
   else if (st.state === "stopped") state = "Stopped.";
+  else if (paused) { state = `Paused: ${(JOBS[(st.resume || {}).kind] || "working").toLowerCase()}.`; detail = "Everything done so far is kept. Other books can use the studio now; press Resume to carry on from here."; }
   else if (book.files.m4b) { state = "The audiobook is ready."; detail = "Listen in step 5. Change anything and record again: only what changed is redone."; }
   else if (book.tidyPending) { state = "Ready when you are. Nothing has started yet."; detail = "Press Make the audiobook to pick the voices, sounds and music first. The writing is cleaned up before anything is recorded."; }
   else if (!book.castDone) { state = "Ready when you are. Nothing has started yet."; detail = "Press Make the audiobook to pick the voices, sounds and music first, or check the cast in step 1."; }
@@ -328,6 +480,8 @@ function openMakeChoices() {
   $("mkMusic").checked = (book.music || "on") === "on";
   $("mkVideoRow").hidden = !book.files.pictures;
   $("mkVideo").checked = false;
+  $("mkStyle").value = book.pictureStyle || "storybook";
+  $("mkStyleRow").hidden = true;
   $("mkStart").disabled = false; $("mkStart").textContent = "Start";
   updateMakePlan();
   $("makeDlg").showModal();
@@ -340,10 +494,13 @@ function updateMakePlan() {
   const eng = (document.querySelector("input[name=mkEngine]:checked") || {}).value || "kokoro";
   steps.push(`Record ${book.files.chapters.some((c) => c.audio) ? "what's changed" : "every chapter"} with ${eng === "chatterbox" ? "Chatterbox" : "Kokoro"}`
     + `${$("mkMusic").checked ? ", with music" : ""}${$("mkSounds").checked && !$("mkSoundsRow").hidden ? " and sounds" : ""}`);
-  if ($("mkVideo").checked && !$("mkVideoRow").hidden) steps.push("Draw the pictures and make the video");
+  $("mkStyleRow").hidden = !($("mkVideo").checked && !$("mkVideoRow").hidden);
+  if ($("mkVideo").checked && !$("mkVideoRow").hidden) {
+    steps.push(`Draw ${$("mkStyle").options[$("mkStyle").selectedIndex].text.split(" (")[0].toLowerCase().replace(/^3d/, "3D")} pictures and make the video`);
+  }
   $("mkPlan").replaceChildren(el("li", { class: "mk-plan-h", text: "It will:" }), ...steps.map((t) => el("li", { text: t })));
 }
-document.querySelectorAll("#makeDlg input").forEach((i) => i.addEventListener("change", updateMakePlan));
+document.querySelectorAll("#makeDlg input, #makeDlg select").forEach((i) => i.addEventListener("change", updateMakePlan));
 $("mkCancel").onclick = () => $("makeDlg").close();
 $("mkStart").onclick = async () => {
   $("mkStart").disabled = true; $("mkStart").textContent = "Starting…";
@@ -351,12 +508,26 @@ $("mkStart").onclick = async () => {
   const choices = { narrator: $("mkNarrator").value, tidy: $("mkTidy").checked,
     music: $("mkMusic").checked ? "on" : "off", soundscapes: $("mkSounds").checked ? "on" : "off" };
   if (engine) choices.engine = engine;
+  if ($("mkVideo").checked) choices.pictureStyle = $("mkStyle").value;
   const r = await api(`/api/projects/${book.id}/settings`, { json: choices });
   if (!r.ok) { $("mkStart").disabled = false; $("mkStart").textContent = "Start"; alert(r.error || "Couldn't save the choices."); return; }
   Object.assign(book, { narrator: choices.narrator, tidyPending: choices.tidy, music: choices.music, soundscapes: choices.soundscapes,
+    pictureStyle: choices.pictureStyle || book.pictureStyle,
     engine: engine || book.engine });
   $("makeDlg").close();
   startJob("all", { video: $("mkVideo").checked && !$("mkVideoRow").hidden });
+};
+$("pauseJob").onclick = async () => {
+  $("pauseJob").disabled = true; $("pauseJob").textContent = "Pausing…";
+  $("runDetail").textContent = "Pausing: recording stops straight away; anything else finishes the step it's on first.";
+  await api(`/api/projects/${book.id}/pause`, { method: "POST" });
+};
+$("resumeJob").onclick = async () => {
+  $("resumeJob").disabled = true; $("resumeJob").textContent = "Resuming…";
+  const r = await api(`/api/projects/${book.id}/resume`, { method: "POST" });
+  if (!r.ok) { $("resumeJob").disabled = false; $("resumeJob").textContent = "Resume"; $("runDetail").textContent = r.error || "Couldn't resume."; return; }
+  renderRun({ state: "queued", progress: 0, detail: "Waiting its turn" });
+  startPolling();
 };
 $("stopJob").onclick = async () => {
   if (!confirm("Stop? What's done so far is kept: press the button again later to carry on from there.")) return;
@@ -701,8 +872,20 @@ function videoBlock(f) {
   const msg = el("p", { class: "hint" });
   const go = el("button", { type: "button", class: "small-btn", text: f.video ? "Make the pictures and video again" : "Make pictures and a video" });
   go.disabled = !f.pictures;
+  const style = el("select", { "aria-label": "Picture style" },
+    ...[["storybook", "Storybook (illustrated)"], ["realistic", "Realistic (like photographs)"], ["cinematic", "Cinematic (like a film)"], ["3d", "3D animated"]]
+      .map(([v, t]) => el("option", { value: v, text: t, selected: (book.pictureStyle || "storybook") === v })));
   go.addEventListener("click", async () => {
-    if (await startJob("video")) { msg.textContent = "Drawing… Progress is at the top. Pictures already drawn are kept, so this is quicker the second time."; go.disabled = true; }
+    const changed = style.value !== (book.pictureStyle || "storybook");
+    if (changed) {
+      await api(`/api/projects/${book.id}/settings`, { json: { pictureStyle: style.value } });
+      book.pictureStyle = style.value;
+    }
+    if (await startJob("video")) {
+      msg.textContent = changed ? "Drawing every picture again in the new look… Progress is at the top."
+        : "Drawing… Progress is at the top. Pictures already drawn are kept, so this is quicker the second time.";
+      go.disabled = true;
+    }
   });
   const box = el("div", { class: "send-sm video-block" },
     el("strong", { text: "Pictures and video" }),
@@ -710,7 +893,7 @@ function videoBlock(f) {
       ? "A picture for every section, drawn in one look for the whole book (long sections get more than one), and a video of this audiobook with them: each picture stays on screen exactly while its part is read, with subtitles. Also a picture book (PDF)."
         + (book.level === "explicit" || book.level === "mature" ? " Grown-up books get tasteful pictures only: everyone is an adult and fully clothed." : "")
       : "Needs a picture app: open Draw Things, turn on Settings → API Server (HTTP, port 7860), and set LOCAL_IMAGE_URL in storymaker.env." }),
-    go, msg);
+    f.pictures ? el("label", { class: "style-line" }, "Picture style ", style) : null, go, msg);
   if (f.video) {
     box.append(el("video", { controls: true, preload: "metadata", src: `${f.video}?${f.videoMade || ""}`, class: "book-video" }),
       el("div", { class: "downloads" },
@@ -776,6 +959,15 @@ function renderListen() {
 }
 
 // ───────────────────────── delete ─────────────────────────
+$("archiveBook").onclick = async () => {
+  if (!confirm(`Move “${book.title}” to the archive on the NAS? It's copied and checked first, then removed from this computer. Bring it back any time from the Archive tab.`)) return;
+  $("archiveBook").disabled = true; $("archiveNote").textContent = "Moving to the archive…";
+  const r = await api("/api/nas/archive", { json: { ids: [book.id] } });
+  if (!r.ok) { $("archiveBook").disabled = false; $("archiveNote").textContent = r.error || "Couldn't move it."; return; }
+  const st = await waitNas(r.task, (t) => { $("archiveNote").textContent = `Moving to the archive… ${t.progress || 0}%`; });
+  if (st.state === "done") { location.hash = ""; showHome(); }
+  else { $("archiveBook").disabled = false; $("archiveNote").textContent = ((st.failed || [])[0] || {}).error || "Couldn't move it."; }
+};
 $("deleteBook").onclick = () => { $("deleteConfirm").hidden = false; $("deleteBook").hidden = true; };
 $("deleteNo").onclick = () => { $("deleteConfirm").hidden = true; $("deleteBook").hidden = false; };
 $("deleteYes").onclick = async () => {

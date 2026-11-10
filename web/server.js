@@ -42,7 +42,13 @@ const SESSION_DAYS = 30;
 
 // ───────────────────────────── database ─────────────────────────────
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-const db = new DatabaseSync(path.join(OUTPUT_DIR, ".storymaker.db"));
+// The database and the stories being made can live on a local disk (DB_PATH, JOBS_DIR) while the library itself
+// (OUTPUT_DIR) is on a NAS: SQLite and busy work folders don't belong on a network share.
+const JOBS_DIR = process.env.JOBS_DIR || path.join(OUTPUT_DIR, ".jobs");
+fs.mkdirSync(JOBS_DIR, { recursive: true });
+const DB_PATH = process.env.DB_PATH || path.join(OUTPUT_DIR, ".storymaker.db");
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+const db = new DatabaseSync(DB_PATH);
 db.exec(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS users (
@@ -60,7 +66,7 @@ const CUT_OFF = [];   // stories a restart cut off: they're picked up again by t
 // StoryMaker just started, so nothing is being made yet: work that was cut off by a restart or an update shows
 // as stopped (and Make it again carries on from where it was), not as running forever.
 try {
-  const jd = path.join(OUTPUT_DIR, ".jobs");
+  const jd = JOBS_DIR;
   for (const name of fs.readdirSync(jd)) {
     if (!name.endsWith(".status.json")) continue;
     const f = path.join(jd, name);
@@ -220,6 +226,7 @@ function runStorymaker(user, args, stdinText = "") {
 }
 
 // Turn the form into a safe argument list.
+const PICTURE_STYLES = ["storybook", "realistic", "cinematic", "3d"];
 function buildArgs(b) {
   const args = [];
   const pick = (v, list, def) => (list.includes(v) ? v : def);
@@ -241,6 +248,7 @@ function buildArgs(b) {
   const writer = pick(b.writer || "", WRITERS, "");
   if (writer) args.push("--provider", writer);
   if (b.portrait) args.push("--portrait");
+  if (PICTURE_STYLES.includes(b.pictureStyle)) args.push("--picture-style", b.pictureStyle);
   if (b.useStyle === false) args.push("--no-style");
   if (b.proofread === false) args.push("--no-proofread");
   if (b.book) args.push("--book");
@@ -310,7 +318,7 @@ function ownJob(u, id) {
 app.get("/api/status/:id", (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
   if (!ownJob(req.user, id)) return res.json({ ok: false, error: "Unknown job" });
-  const f = path.join(OUTPUT_DIR, ".jobs", `${id}.status.json`);
+  const f = path.join(JOBS_DIR, `${id}.status.json`);
   if (!fs.existsSync(f)) return res.json({ ok: false, error: "Unknown job" });
   const st = JSON.parse(fs.readFileSync(f, "utf8"));
   if (st.state === "done" && st.result && st.result.run_id) {
@@ -327,11 +335,11 @@ app.get("/api/jobs/active", (req, res) => {
     .all(req.user.id);
   const jobs = [];
   for (const j of rows) {
-    const f = path.join(OUTPUT_DIR, ".jobs", `${j.id}.status.json`);
+    const f = path.join(JOBS_DIR, `${j.id}.status.json`);
     let st, age;
     try { st = JSON.parse(fs.readFileSync(f, "utf8")); age = Date.now() - fs.statSync(f).mtimeMs; } catch { continue; }
     const live = (st.state === "running" || st.state === "queued") && age < 60 * 60 * 1000;
-    const justDone = (st.state === "done" || st.state === "failed" || st.state === "stopped") && age < 10 * 60 * 1000;
+    const justDone = ["done", "failed", "stopped", "paused"].includes(st.state) && age < 10 * 60 * 1000;
     if (!live && !justDone) continue;
     let info = {};
     try { info = JSON.parse(j.info || "{}"); } catch { /* old row */ }
@@ -346,7 +354,7 @@ app.get("/api/jobs/active", (req, res) => {
 
 // Stories that were started but never finished (stopped, cut off by a restart, or still waiting): the scenes
 // already written are kept in the job's folder. They can be read, carried on, or deleted from any device.
-function jobFolder(id) { return path.join(OUTPUT_DIR, ".jobs", id); }
+function jobFolder(id) { return path.join(JOBS_DIR, id); }
 function jobScenes(id) {
   let names = [];
   try { names = fs.readdirSync(jobFolder(id)).filter((n) => /^scene_c\d+_s\d+\.txt$/.test(n)).sort(); } catch { /* none */ }
@@ -365,11 +373,11 @@ app.get("/api/jobs/unfinished", (req, res) => {
     + "ORDER BY created DESC").all(req.user.id);
   const out = [];
   for (const j of rows) {
-    const f = path.join(OUTPUT_DIR, ".jobs", `${j.id}.status.json`);
+    const f = path.join(JOBS_DIR, `${j.id}.status.json`);
     let st = {}, age = 0;
     try { st = JSON.parse(fs.readFileSync(f, "utf8")); age = Date.now() - fs.statSync(f).mtimeMs; } catch { continue; }
     const stale = (st.state === "running" || st.state === "queued") && age > 60 * 60 * 1000;
-    if (st.state !== "failed" && st.state !== "stopped" && !stale) continue;
+    if (st.state !== "failed" && st.state !== "stopped" && st.state !== "paused" && !stale) continue;
     const scenes = jobScenes(j.id), outline = jobOutline(j.id);
     if (!scenes.length && !outline) continue;              // nothing was written: nothing to find
     let info = {};
@@ -379,7 +387,8 @@ app.get("/api/jobs/unfinished", (req, res) => {
     out.push({ id: j.id, title: (outline && outline.title) || st.title || "Untitled story", idea: info.idea || "",
       level: (info.body && info.body.level) || null, started: j.created,
       written: scenes.length || (outline && outline.written) || 0, planned,
-      error: stale ? "It was cut off (StoryMaker or the Mac restarted)." : st.state === "stopped" ? "You stopped it." : (st.error || ""),
+      error: stale ? "It was cut off (StoryMaker or the Mac restarted)." : st.state === "stopped" ? "You stopped it." : st.state === "paused" ? "Paused." : (st.error || ""),
+      paused: st.state === "paused",
       canResume: !!(info.body || outline) });
   }
   res.json({ ok: true, stories: out });
@@ -454,20 +463,32 @@ function isStorymaker(pid) {
 }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 function markStopped(f, st, why) {
+  const pauseFlag = f.replace(/\.status\.json$/, ".pause");
+  const paused = fs.existsSync(pauseFlag);
+  try { fs.unlinkSync(pauseFlag); } catch { /* none */ }
+  if (paused) why = "Paused. Everything made so far is kept: press Resume in Unfinished stories to carry on from here.";
   try {
     const now = JSON.parse(fs.readFileSync(f, "utf8"));
     if (now.state === "running" || now.state === "queued") {
-      fs.writeFileSync(f, JSON.stringify({ ...now, state: "stopped", detail: why, error: null }));
+      fs.writeFileSync(f, JSON.stringify({ ...now, state: paused ? "paused" : "stopped", detail: why, error: null }));
     }
   } catch { if (st) fs.writeFileSync(f, JSON.stringify({ ...st, state: "stopped", detail: why })); }
 }
-app.post("/api/jobs/:id/stop", (req, res) => {
+app.post("/api/jobs/:id/pause", (req, res) => {
+  // Pause = Stop that says "paused": the story waits in Unfinished stories with Resume (only for new stories)
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
   if (!id || !ownJob(req.user, id)) return res.status(404).json({ ok: false, error: "Not found." });
-  const f = path.join(OUTPUT_DIR, ".jobs", `${id}.status.json`);
+  stopJob(req, res, true);
+});
+app.post("/api/jobs/:id/stop", (req, res) => stopJob(req, res, false));
+function stopJob(req, res, pause) {
+  const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
+  if (!id || !ownJob(req.user, id)) return res.status(404).json({ ok: false, error: "Not found." });
+  const f = path.join(JOBS_DIR, `${id}.status.json`);
   let st = null;
   try { st = JSON.parse(fs.readFileSync(f, "utf8")); } catch { return res.json({ ok: false, error: "That isn't running." }); }
   if (st.state !== "running" && st.state !== "queued") return res.json({ ok: true, state: st.state });
+  if (pause) { try { fs.writeFileSync(path.join(JOBS_DIR, `${id}.pause`), "pause"); } catch { /* stops anyway */ } }
   const wrote = !!jobOutline(id) || jobScenes(id).length > 0;
   const why = st.kind && st.kind !== "make" ? "Stopped." : wrote
     ? "Stopped. What was already made is kept: carry it on from Unfinished stories, or delete it there."
@@ -489,14 +510,14 @@ app.post("/api/jobs/:id/stop", (req, res) => {
     }
   }, 1000);
   res.json({ ok: true, state: "stopping" });
-});
+}
 
 app.delete("/api/jobs/:id", (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
   const j = db.prepare("SELECT * FROM jobs WHERE id = ?").get(id);
   if (!j || j.user_id !== req.user.id) return res.status(404).json({ ok: false, error: "Not found." });
   fs.rmSync(jobFolder(id), { recursive: true, force: true });
-  fs.rmSync(path.join(OUTPUT_DIR, ".jobs", `${id}.status.json`), { force: true });
+  fs.rmSync(path.join(JOBS_DIR, `${id}.status.json`), { force: true });
   db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
   res.json({ ok: true });
 });
@@ -506,7 +527,7 @@ app.get("/api/status/:id/preview/:name", (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9]/g, "");
   const name = String(req.params.name);
   if (!id || !ownJob(req.user, id) || !/^preview_[\w-]+\.jpg$/.test(name)) return res.sendStatus(404);
-  const f = path.join(OUTPUT_DIR, ".jobs", id, name);
+  const f = path.join(JOBS_DIR, id, name);
   if (!fs.existsSync(f)) return res.sendStatus(404);
   res.set("Cache-Control", "no-store").sendFile(f);
 });
@@ -602,7 +623,7 @@ app.get("/api/features", async (req, res) => {
   if (!pyFeatures) pyFeatures = await runStorymaker(req.user, ["--features"]);
   const levels = allowedLevels(req.user);
   res.json({ ok: true, mature: levels.includes("mature"), adult: levels.includes("explicit"), role: req.user.role,
-    localPictures: !!(pyFeatures && pyFeatures.local_pictures), studioUrl: process.env.AUDIO_STUDIO_URL || "" });
+    localPictures: !!(pyFeatures && pyFeatures.local_pictures), studioUrl: process.env.AUDIO_STUDIO_URL || envFileValue("AUDIO_STUDIO_URL") || "" });
 });
 
 // Your own account: user name, password, and (owner) the grown-up switch. Needs your current password.
@@ -819,7 +840,8 @@ app.post("/api/stories/:id/remaster", async (req, res) => {
   const id = guard(req, res); if (!id) return;
   const b = req.body || {};
   const args = ["--remaster", id, "--background", ...(b.revoice ? ["--revoice"] : []), ...(b.redesign ? ["--redesign"] : []),
-    ...(b.redraw ? ["--redraw"] : [])];
+    ...(b.redraw ? ["--redraw"] : []),
+    ...(b.redraw && PICTURE_STYLES.includes(b.pictureStyle) ? ["--picture-style", b.pictureStyle] : [])];
   res.json(startJob(req, "remaster", id, await runStorymaker(req.user, args)));
 });
 
@@ -869,6 +891,120 @@ app.delete("/api/stories/:id", async (req, res) => {
   const r = await runStorymaker(req.user, ["--delete", id]);
   if (r.ok) db.prepare("DELETE FROM stories WHERE id = ?").run(id);
   res.json(r);
+});
+
+// ───────────────────────────── the NAS archive ─────────────────────────────
+// Audio Studio (on the Mac, later the server) does the copying, where the NAS share is connected; StoryMaker
+// decides whose stories can be moved, seen and brought back.
+const HELPER_URL = (process.env.STUDIO_HELPER_URL || envFileValue("STUDIO_HELPER_URL") || "http://host.docker.internal:8096").replace(/\/$/, "");
+async function helper(method, p, body) {
+  let token = "";
+  try { token = fs.readFileSync(path.join(OUTPUT_DIR, ".helper-token"), "utf8").trim(); } catch { /* studio not run yet */ }
+  if (!token) return { ok: false, error: "Audio Studio isn't running, and it's what moves stories to and from the NAS. Start it on the Mac." };
+  try {
+    const r = await fetch(HELPER_URL + p, { method, headers: { "Content-Type": "application/json", "X-Helper-Token": token },
+      body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(60000) });
+    const j = await r.json().catch(() => ({}));
+    return r.ok ? j : { ok: false, error: j.error || j.detail || `Audio Studio said ${r.status}` };
+  } catch {
+    return { ok: false, error: "Can't reach Audio Studio, which moves stories to and from the NAS. Is it running?" };
+  }
+}
+function folderSize(dir) {
+  let total = 0;
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f); else if (e.isFile()) total += fs.statSync(f).size;
+    }
+  };
+  try { walk(dir); } catch { /* gone */ }
+  return total;
+}
+function storyBusy(id) {
+  const rows = db.prepare("SELECT id FROM jobs WHERE story_id = ? AND created > datetime('now', '-1 days')").all(id);
+  return rows.some((j) => {
+    try {
+      const f = path.join(JOBS_DIR, `${j.id}.status.json`);
+      const st = JSON.parse(fs.readFileSync(f, "utf8"));
+      return (st.state === "running" || st.state === "queued") && Date.now() - fs.statSync(f).mtimeMs < 60 * 60 * 1000;
+    } catch { return false; }
+  });
+}
+function mayMove(u, id) {
+  const row = db.prepare("SELECT user_id FROM stories WHERE id = ?").get(id);
+  return !!row && (u.role === "owner" || row.user_id === u.id) && canSee(u, id);
+}
+// stories that can go to the NAS, with their size
+app.get("/api/nas/candidates", (req, res) => {
+  const out = [];
+  for (const id of syncStories()) {
+    if (!mayMove(req.user, id)) continue;
+    const r = readResult(id) || {};
+    out.push({ id, title: r.title || id, level: r.level, created: r.created || id.slice(0, 17),
+      size: folderSize(path.join(OUTPUT_DIR, id)), busy: storyBusy(id),
+      thumb: fs.existsSync(path.join(OUTPUT_DIR, id, "thumb.jpg")) ? `/media/${encodeURIComponent(id)}/thumb.jpg` : null });
+  }
+  out.sort((a, b) => (a.id < b.id ? 1 : -1));
+  res.json({ ok: true, stories: out });
+});
+// what's on the NAS that you may see
+app.get("/api/nas", async (req, res) => {
+  const h = await helper("GET", "/api/helper/nas");
+  if (h.ok === false && !("configured" in h)) return res.json({ ok: false, error: h.error, items: [] });
+  const items = (h.items || []).filter((it) => {
+    const row = db.prepare("SELECT user_id FROM stories WHERE id = ?").get(it.id);
+    const mine = row ? row.user_id === req.user.id : it.owner_name === req.user.username;
+    return (req.user.role === "owner" || mine) && allowedLevels(req.user).includes(it.level || "family");
+  }).map((it) => ({ id: it.id, title: it.title, level: it.level, created: it.created, archived: it.archived,
+    size: it.size, logline: it.logline, onComputer: !!it.on_computer, mode: it.mode,
+    by: req.user.role === "owner" && it.owner_name && it.owner_name !== req.user.username ? it.owner_name : null }));
+  res.json({ ok: !!h.ok, error: h.ok ? undefined : h.error, configured: h.configured !== false, free: h.free || null, items });
+});
+// move (or back up) stories to the NAS
+app.post("/api/nas/archive", async (req, res) => {
+  const b = req.body || {};
+  const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map((x) => storyId(String(x))).filter(Boolean))];
+  const items = [];
+  for (const id of ids) {
+    if (!mayMove(req.user, id)) return res.json({ ok: false, error: "You can only move your own stories." });
+    if (storyBusy(id)) return res.json({ ok: false, error: `“${(readResult(id) || {}).title || id}” is being worked on. Stop it or wait until it's done.` });
+    const r = readResult(id) || {};
+    const row = db.prepare("SELECT user_id FROM stories WHERE id = ?").get(id);
+    const owner = row && db.prepare("SELECT username FROM users WHERE id = ?").get(row.user_id);
+    items.push({ id, title: r.title || id, level: r.level || "family", owner: row ? row.user_id : null,
+      owner_name: owner ? owner.username : null, created: r.created || id.slice(0, 17), mode: r.mode, logline: r.logline || "" });
+  }
+  if (!items.length) return res.json({ ok: false, error: "Pick at least one story." });
+  const h = await helper("POST", "/api/helper/nas/archive", { items, keep: !!b.keep });
+  res.json(h.ok ? { ok: true, task: h.task } : { ok: false, error: h.error });
+});
+// bring stories back from the NAS
+app.post("/api/nas/restore", async (req, res) => {
+  const want = new Set((Array.isArray((req.body || {}).ids) ? req.body.ids : []).map(String));
+  const listing = await helper("GET", "/api/helper/nas");
+  if (!listing.ok) return res.json({ ok: false, error: listing.error });
+  const ids = [];
+  for (const it of listing.items || []) {
+    if (!want.has(it.id) || it.on_computer) continue;
+    const row = db.prepare("SELECT user_id FROM stories WHERE id = ?").get(it.id);
+    const mine = row ? row.user_id === req.user.id : it.owner_name === req.user.username;
+    if ((req.user.role === "owner" || mine) && allowedLevels(req.user).includes(it.level || "family")) {
+      ids.push(it.id);
+      // a fresh StoryMaker (on the new server, say) learns whose it is again
+      if (!row) {
+        const u = it.owner_name && db.prepare("SELECT id FROM users WHERE username = ?").get(it.owner_name);
+        db.prepare("INSERT OR IGNORE INTO stories (id, user_id) VALUES (?, ?)").run(it.id, u ? u.id : req.user.id);
+      }
+    }
+  }
+  if (!ids.length) return res.json({ ok: false, error: "Nothing to bring back (it may be here already)." });
+  const h = await helper("POST", "/api/helper/nas/restore", { ids });
+  res.json(h.ok ? { ok: true, task: h.task } : { ok: false, error: h.error });
+});
+app.get("/api/nas/task/:tid", async (req, res) => {
+  const tid = String(req.params.tid).replace(/[^a-f0-9]/g, "");
+  res.json(await helper("GET", `/api/helper/nas/task/${tid}`));
 });
 
 app.get("/api/stories", (req, res) => {

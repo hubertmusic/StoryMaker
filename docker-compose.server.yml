@@ -1,0 +1,35 @@
+# StoryMaker on the server (the OptiPlex, Linux). Started by server/setup-server.sh and update.sh:
+#   docker compose -f docker-compose.server.yml up -d --build
+#
+# The library (finished stories), sounds and music live on the NAS, which the server connects at /mnt/storymaker.
+# The database and the stories being made stay on the server's own disk (./local): faster, and SQLite doesn't
+# belong on a network share. Draw Things, Ollama and Audio Studio stay on the Mac; storymaker.env says where.
+services:
+  storymaker:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: storymaker
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8095:3000"
+    environment:
+      OUTPUT_DIR: /data/nas/library
+      SOUNDS_DIR: /data/nas/sounds
+      MUSIC_DIR: /data/nas/music
+      JOBS_DIR: /data/local/jobs
+      DB_PATH: /data/local/storymaker.db
+      LIBRARY_CHECK_FILE: /data/nas/.storymaker-nas   # only there when the NAS is connected
+    extra_hosts:
+      - "host.docker.internal:host-gateway"           # the server itself (its backup Ollama)
+    volumes:
+      - ./storymaker.env:/app/storymaker.env:ro
+      - ./local:/data/local
+      # the NAS: if it connects after StoryMaker starts (or reconnects), StoryMaker sees it without a restart
+      - type: bind
+        source: ${NAS_MOUNT:-/mnt/storymaker}
+        target: /data/nas
+        bind:
+          propagation: rslave
+      - ./web/public:/app/public
