@@ -58,14 +58,21 @@ def share_helper_key(quiet=False):
 
 def keep_connected():
     """The library and the archive may be on the NAS: reconnect it if it drops (Mac asleep, NAS restarted), and
-    share the helper key again once it's back."""
+    share the helper key again once it's back. Every 10 minutes, finished audiobooks are copied to the NAS too (for
+    StoryMaker's podcast feed)."""
+    n = 0
     while True:
         try:
             if cfg.get("NAS_URL") and not Path(os.path.expanduser(str(cfg.get("ARCHIVE_DIR") or "/nonexistent"))).is_dir():
                 NAS._mount(cfg["NAS_URL"])
             share_helper_key(quiet=True)
+            if n % 10 == 0 and str(cfg.get("ARCHIVE_DIR") or "").strip() and worker.current is None:
+                copied = NAS.publish_all(cfg)
+                if copied:
+                    E.log(f"Put {copied} finished audiobook{'s' * (copied != 1)} on the NAS for the podcast feed.")
         except Exception as e:
             E.log(f"NAS keeper: {e}")
+        n += 1
         time.sleep(60)
 
 

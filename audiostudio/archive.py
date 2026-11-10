@@ -266,3 +266,97 @@ def start(name, steps):
 def task(tid):
     t = tasks.get(tid)
     return dict(t) if t else None
+
+
+# ───────────────────────────── finished audiobooks on the NAS ─────────────────────────────
+# Every finished studio audiobook is also copied to "StoryMaker Audiobooks/<book id>/" on the NAS, with an
+# info.json, so StoryMaker on the server can put it in your podcast feed even while this Mac is asleep. The book
+# itself stays in the studio; deleting the book takes its copy off the NAS too.
+
+BOOKS = "StoryMaker Audiobooks"
+
+
+def _books_root(cfg):
+    return base(cfg, mount=False).parent / BOOKS
+
+
+def _publish_from(cfg, d, pid, root):
+    out = d / "out"
+    src = next((out / n for n in ("story.mp3", "story.m4b") if (out / n).exists()), None)
+    if not src or not (d / "project.json").exists():
+        return False
+    p = json.loads((d / "project.json").read_text())
+    dst = root / pid
+    info_f = dst / "info.json"
+    st = src.stat()
+    try:
+        old = json.loads(info_f.read_text())
+        if old.get("src_mtime") == st.st_mtime and old.get("size") == st.st_size and (dst / old.get("file", "")).exists():
+            return False                                     # already there and up to date
+    except (OSError, ValueError):
+        pass
+    dst.mkdir(parents=True, exist_ok=True)
+    name = "audiobook" + src.suffix
+    part = dst / (name + ".partial")
+    shutil.copyfile(src, part)
+    if part.stat().st_size != st.st_size:
+        part.unlink(missing_ok=True)
+        raise OSError(f"the copy of {p.get('title', pid)} came out the wrong size")
+    part.replace(dst / name)
+    cover = out / "cover.jpg"
+    if cover.exists():
+        shutil.copyfile(cover, dst / "cover.jpg")
+    src_info = p.get("source") or {}
+    info = {"id": pid, "title": p.get("title") or pid, "author": p.get("author") or "", "level": p.get("level") or "family",
+            "owner": str(p.get("owner") or ""), "created": p.get("created") or "",
+            "finished": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(st.st_mtime)),
+            "file": name, "size": st.st_size, "src_mtime": st.st_mtime, "cover": cover.exists(),
+            "source": {"type": src_info.get("type", ""), "id": src_info.get("id", "")},
+            "sent_to_storymaker": bool(p.get("sent_to_storymaker"))}
+    tmp = dst / "info.json.tmp"
+    tmp.write_text(json.dumps(info, indent=1))
+    tmp.replace(info_f)
+    return True
+
+
+def publish_book(cfg, pid):
+    """Copy one finished book's audiobook to the NAS (quietly does nothing if the NAS isn't connected)."""
+    import engine
+    try:
+        root = _books_root(cfg)
+    except Exception:
+        return False
+    d = engine.studio_dir(cfg) / "projects" / pid
+    if not d.is_dir():
+        d = base(cfg, mount=False) / "studio" / pid              # an archived book
+    return _publish_from(cfg, d, pid, root)
+
+
+def publish_all(cfg):
+    """Bring the NAS copies up to date: new or remade audiobooks copied, deleted books' copies removed.
+    Returns how many were copied (None if the NAS isn't connected)."""
+    import engine
+    try:
+        arch = base(cfg, mount=False)
+        root = _books_root(cfg)
+    except Exception:
+        return None
+    root.mkdir(parents=True, exist_ok=True)
+    homes = {}
+    for folder in (arch / "studio", engine.studio_dir(cfg) / "projects"):     # the studio's own copy wins
+        try:
+            for d in folder.iterdir():
+                if d.is_dir() and (d / "project.json").exists():
+                    homes[d.name] = d
+        except OSError:
+            return None                                      # couldn't look: don't remove anything this time
+    copied = 0
+    for pid, d in homes.items():
+        try:
+            copied += bool(_publish_from(cfg, d, pid, root))
+        except Exception as e:
+            print(f"[studio] couldn't put {pid}'s audiobook on the NAS: {e}", file=sys.stderr, flush=True)
+    for d in root.iterdir():
+        if d.is_dir() and d.name not in homes and (d / "info.json").exists():
+            shutil.rmtree(d, ignore_errors=True)             # the book was deleted
+    return copied

@@ -967,3 +967,14 @@ everything done so far, so another story or book can go first. Resume carries on
     make with its cover creator.
   - **For YouTube** (video stories): the title and a description with chapter times to paste in. YouTube turns them
     into chapters.
+
+## 29. Audio Studio audiobooks and the archive in the podcast feed
+
+- Every finished Audio Studio audiobook is also copied to the NAS, into **StoryMaker Audiobooks/<book>/** (the
+  audiobook, its cover and an info.json). This happens when the book finishes, and the studio catches up every 10
+  minutes, so books made while the NAS was away get copied later. Deleting a book in the studio removes its copy.
+- In **Podcast feed**, tick **Audiobooks from Audio Studio** (on by default) and/or **Archived stories**. Both are
+  played straight from the NAS by the server, so they keep working while the Mac is asleep. A studio book you sent back
+  into its StoryMaker story shows up once, as that story. People see only their own books and stories (you see
+  everyone's), and Explicit stays out unless you tick it in.
+- This needs StoryMaker running on the server with the NAS (NAS_ROOT, which docker-compose.server.yml sets).

@@ -21,6 +21,7 @@ services:
       JOBS_DIR: /data/local/jobs
       DB_PATH: /data/local/storymaker.db
       LIBRARY_CHECK_FILE: /data/nas/.storymaker-nas   # only there when the NAS is connected
+      NAS_ROOT: /data/nas                              # Audio Studio's audiobooks and the archive, for the podcast feed
     extra_hosts:
       - "host.docker.internal:host-gateway"           # the server itself (its backup Ollama)
     volumes:

@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "3.5 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "3.6 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
@@ -1673,6 +1673,14 @@ class Worker:
             else:
                 run_record(self.cfg, pid, lambda f, t, **x: progress(0.15 + f * 0.85, t, **x))
         write_status(d, state="done", progress=100, detail="Finished")
+        if kind in ("all", "record"):                    # a copy on the NAS, for the podcast feed
+            def publish():
+                try:
+                    import archive
+                    archive.publish_book(self.cfg, pid)
+                except Exception as e:
+                    log(f"Couldn't put the audiobook on the NAS yet ({e}); it's tried again later.")
+            threading.Thread(target=publish, daemon=True).start()
         if kind in ("all", "record", "video"):
             what = {"all": "The audiobook is ready", "record": "The recording is done", "video": "The video is ready"}[kind]
             notify_phone(self.cfg, f"Audio Studio: {self._title(pid)}", f"{what}.", "headphones")

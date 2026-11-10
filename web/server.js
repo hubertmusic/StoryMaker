@@ -76,6 +76,8 @@ db.exec(`
     attempts INTEGER NOT NULL DEFAULT 0, next_try INTEGER NOT NULL DEFAULT 0, pos REAL NOT NULL DEFAULT 0);
 `);
 try { db.exec("ALTER TABLE users ADD COLUMN ntfy_topic TEXT"); } catch { /* already there */ }
+try { db.exec("ALTER TABLE feeds ADD COLUMN studio INTEGER NOT NULL DEFAULT 1"); } catch { /* already there */ }
+try { db.exec("ALTER TABLE feeds ADD COLUMN archive INTEGER NOT NULL DEFAULT 0"); } catch { /* already there */ }
 try {   // jobs from before notifications existed are counted as told about, so turning them on doesn't flood the phone
   db.exec("ALTER TABLE jobs ADD COLUMN notified INTEGER NOT NULL DEFAULT 0");
   db.exec("UPDATE jobs SET notified = 1");
@@ -227,62 +229,123 @@ function idDate(id) {
   const m = String(id).match(/^(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)/);
   return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : new Date();
 }
+// Besides the library, the feed can carry Audio Studio's finished audiobooks and archived stories, both read straight
+// from the NAS (NAS_ROOT: the share's top folder, /data/nas on the server), so they play even with the Mac asleep.
+const NAS_ROOT = () => process.env.NAS_ROOT || envFileValue("NAS_ROOT") || "";
+const ARCHIVED_DIR = () => NAS_ROOT() && path.join(NAS_ROOT(), "StoryMaker Archive", "storymaker");
+const STUDIO_BOOKS_DIR = () => NAS_ROOT() && path.join(NAS_ROOT(), "StoryMaker Audiobooks");
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
+const SAFE_DIR = /^[\w.-]{3,120}$/;
+function mayHear(u, f, owner, level) {
+  level = level || "family";
+  if (u.role !== "owner" && String(owner) !== String(u.id)) return false;
+  return allowedLevels(u).includes(level) && (level !== "explicit" || !!f.explicit);
+}
+const MEDIA = [["story.mp3", "audio/mpeg"], ["story.m4a", "audio/mp4"], ["story.m4b", "audio/mp4"], ["story.mp4", "video/mp4"]];
+function mediaIn(dir, names = MEDIA) {
+  for (const [name, type] of names) {
+    const f = path.join(dir, name);
+    if (fs.existsSync(f)) return { file: f, name, type, size: fs.statSync(f).size };
+  }
+  return null;
+}
+// Everything one person's feed holds: [{kind, id, dir, media, title, summary, level, at, thumb, episode}]
+function feedItems(u, f) {
+  const out = [];
+  const library = new Set();
+  for (const id of syncStories()) {
+    if (!canSee(u, id)) continue;
+    const r = readResult(id) || {};
+    library.add(id);
+    if (r.level === "explicit" && !f.explicit) continue;
+    const media = feedFile(id);
+    if (!media) continue;
+    out.push({ kind: "s", id, dir: path.join(OUTPUT_DIR, id), media, title: r.title || id, level: r.level,
+      summary: (r.series && r.episode ? `${r.series}, episode ${r.episode}. ` : "") + (r.logline || ""),
+      episode: r.series && r.episode ? r.episode : 0, at: idDate(id), thumb: "thumb.jpg" });
+  }
+  if (f.studio && STUDIO_BOOKS_DIR()) {
+    let names = []; try { names = fs.readdirSync(STUDIO_BOOKS_DIR()); } catch { /* not there yet */ }
+    for (const id of names) {
+      if (!SAFE_DIR.test(id)) continue;
+      const dir = path.join(STUDIO_BOOKS_DIR(), id), b = readJson(path.join(dir, "info.json"));
+      if (!b || !b.file || !mayHear(u, f, b.owner, b.level)) continue;
+      // a book sent back into its StoryMaker story is already in the feed as that story
+      if (b.sent_to_storymaker && b.source && b.source.type === "storymaker" && library.has(b.source.id)) continue;
+      const media = mediaIn(dir, [[b.file, b.file.endsWith(".mp3") ? "audio/mpeg" : "audio/mp4"]]);
+      if (!media) continue;
+      out.push({ kind: "b", id, dir, media, title: b.title || id, level: b.level,
+        summary: `Audiobook from Audio Studio${b.author ? `, by ${b.author}` : ""}.`, episode: 0,
+        at: new Date(b.finished || b.created || Date.now()), thumb: b.cover ? "cover.jpg" : "" });
+    }
+  }
+  if (f.archive && ARCHIVED_DIR()) {
+    let names = []; try { names = fs.readdirSync(ARCHIVED_DIR()); } catch { /* none */ }
+    for (const id of names) {
+      if (!SAFE_DIR.test(id) || library.has(id)) continue;              // brought back: it's in the library
+      const dir = path.join(ARCHIVED_DIR(), id), a = readJson(path.join(dir, "archive.json"));
+      if (!a || !mayHear(u, f, a.owner, a.level)) continue;
+      const r = readJson(path.join(dir, "result.json")) || {};
+      const media = mediaIn(dir);
+      if (!media) continue;
+      out.push({ kind: "a", id, dir, media, title: a.title || r.title || id, level: a.level,
+        summary: (r.series && r.episode ? `${r.series}, episode ${r.episode}. ` : "") + (a.logline || r.logline || ""),
+        episode: r.series && r.episode ? r.episode : 0, at: idDate(id), thumb: fs.existsSync(path.join(dir, "thumb.jpg")) ? "thumb.jpg" : "" });
+    }
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
 app.get("/feed/:token.xml", (req, res) => {
   const fu = feedUser(req.params.token);
   if (!fu) return res.sendStatus(404);
   const base = `${publicBase(req)}/feed/${fu.feed.token}`;
-  const items = [];
-  for (const id of syncStories()) {
-    if (!canSee(fu.user, id)) continue;
-    const r = readResult(id) || {};
-    if (r.level === "explicit" && !fu.feed.explicit) continue;
-    const media = feedFile(id);
-    if (!media) continue;
-    const eid = encodeURIComponent(id);
-    const ext = path.extname(media.name);
-    const thumb = fs.existsSync(path.join(OUTPUT_DIR, id, "thumb.jpg")) ? `${base}/${eid}/thumb.jpg` : "";
-    const sub = r.series && r.episode ? `${r.series}, episode ${r.episode}. ` : "";
-    items.push({ id, at: idDate(id), xml: `    <item>
-      <title>${xml(r.title || id)}</title>
-      <description>${xml(sub + (r.logline || ""))}</description>
-      <itunes:summary>${xml(sub + (r.logline || ""))}</itunes:summary>
-      <guid isPermaLink="false">${xml(id)}</guid>
-      <pubDate>${idDate(id).toUTCString()}</pubDate>
-      <enclosure url="${xml(`${base}/${eid}/play${ext}`)}" length="${media.size}" type="${media.type}"/>
-${thumb ? `      <itunes:image href="${xml(thumb)}"/>\n` : ""}${r.series && r.episode ? `      <itunes:episode>${parseInt(r.episode, 10) || 1}</itunes:episode>\n` : ""}      <itunes:explicit>${["mature", "explicit"].includes(r.level) ? "true" : "false"}</itunes:explicit>
-    </item>` });
-  }
-  items.sort((a, b) => b.at - a.at);
-  const cover = items.length && fs.existsSync(path.join(OUTPUT_DIR, items[0].id, "thumb.jpg")) ? `${base}/${encodeURIComponent(items[0].id)}/thumb.jpg` : "";
+  const items = feedItems(fu.user, fu.feed);
+  const at = (it, file) => `${base}/${it.kind}/${encodeURIComponent(it.id)}/${file}`;
+  const body = items.map((it) => {
+    const thumb = it.thumb && fs.existsSync(path.join(it.dir, it.thumb)) ? at(it, it.thumb) : "";
+    return `    <item>
+      <title>${xml(it.title)}</title>
+      <description>${xml(it.summary)}</description>
+      <itunes:summary>${xml(it.summary)}</itunes:summary>
+      <guid isPermaLink="false">${xml(`${it.kind === "s" ? "" : it.kind + ":"}${it.id}`)}</guid>
+      <pubDate>${it.at.toUTCString()}</pubDate>
+      <enclosure url="${xml(at(it, `play${path.extname(it.media.name)}`))}" length="${it.media.size}" type="${it.media.type}"/>
+${thumb ? `      <itunes:image href="${xml(thumb)}"/>\n` : ""}${it.episode ? `      <itunes:episode>${parseInt(it.episode, 10) || 1}</itunes:episode>\n` : ""}      <itunes:explicit>${["mature", "explicit"].includes(it.level) ? "true" : "false"}</itunes:explicit>
+    </item>`;
+  }).join("\n");
+  const first = items.find((it) => it.thumb && fs.existsSync(path.join(it.dir, it.thumb)));
+  const cover = first ? at(first, first.thumb) : "";
   res.type("application/rss+xml").set("Cache-Control", "no-cache").send(`<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
   <channel>
     <title>${xml(`StoryMaker (${fu.user.username})`)}</title>
-    <description>Your stories from StoryMaker, private to you.</description>
+    <description>Your stories and audiobooks from StoryMaker, private to you.</description>
     <link>${xml(publicBase(req))}</link>
     <language>en</language>
     <itunes:author>StoryMaker</itunes:author>
     <itunes:block>Yes</itunes:block>
     <itunes:explicit>false</itunes:explicit>
-${cover ? `    <itunes:image href="${xml(cover)}"/>\n    <image><url>${xml(cover)}</url><title>StoryMaker</title><link>${xml(publicBase(req))}</link></image>\n` : ""}${items.map((i) => i.xml).join("\n")}
+${cover ? `    <itunes:image href="${xml(cover)}"/>\n    <image><url>${xml(cover)}</url><title>StoryMaker</title><link>${xml(publicBase(req))}</link></image>\n` : ""}${body}
   </channel>
 </rss>
 `);
 });
-app.get("/feed/:token/:id/:file", (req, res) => {
+// A file from the feed: s = a library story, b = a studio audiobook, a = an archived story (checked like the feed)
+app.get("/feed/:token/:kind/:id/:file", (req, res) => {
   const fu = feedUser(req.params.token);
-  const id = req.params.id;
-  if (!fu || id.startsWith(".") || id.includes("/") || !canSee(fu.user, id)) return res.sendStatus(404);
-  const r = readResult(id) || {};
-  if (r.level === "explicit" && !fu.feed.explicit) return res.sendStatus(404);
-  if (req.params.file === "thumb.jpg") {
-    const t = path.join(OUTPUT_DIR, id, "thumb.jpg");
-    return fs.existsSync(t) ? res.sendFile(t) : res.sendStatus(404);
+  const { kind, id, file } = req.params;
+  if (!fu || !["s", "b", "a"].includes(kind) || !SAFE_DIR.test(id)) return res.sendStatus(404);
+  const it = feedItems(fu.user, fu.feed).find((x) => x.kind === kind && x.id === id);
+  if (!it) return res.sendStatus(404);
+  if (file === "thumb.jpg" || file === "cover.jpg") {
+    const t = path.join(it.dir, file);
+    return file === it.thumb && fs.existsSync(t) ? res.sendFile(t) : res.sendStatus(404);
   }
-  const media = /^play\.(mp3|m4a|mp4)$/.test(req.params.file) && feedFile(id);
-  if (!media) return res.sendStatus(404);
-  res.sendFile(media.file, { headers: { "Content-Type": media.type } });   // supports skipping (Range)
+  if (file !== `play${path.extname(it.media.name)}`) return res.sendStatus(404);
+  res.sendFile(it.media.file, { headers: { "Content-Type": it.media.type } });   // supports skipping (Range)
 });
+// (addresses from before the audiobooks and archive came along still work)
+app.get("/feed/:token/:id/:file", (req, res) => res.redirect(301, `/feed/${req.params.token}/s/${encodeURIComponent(req.params.id)}/${req.params.file}`));
 
 // The sign-in page and what it needs are open; everything else needs a signed-in person.
 const OPEN = /^\/(login\.html|login\.js|style\.css|fonts\/[\w.-]+|manifest\.webmanifest|icon-\d+\.png|apple-touch-icon\.png)$/;
@@ -1203,6 +1266,7 @@ app.get("/api/feed", (req, res) => {
     f = db.prepare("SELECT * FROM feeds WHERE user_id = ?").get(req.user.id);
   }
   res.json({ ok: true, url: f ? `${publicBase(req)}/feed/${f.token}.xml` : null, explicit: !!(f && f.explicit),
+    studio: f ? !!f.studio : true, archive: !!(f && f.archive), nas: !!NAS_ROOT(),
     canExplicit: allowedLevels(req.user).includes("explicit"), https: publicBase(req).startsWith("https:") });
 });
 app.post("/api/feed", (req, res) => {
@@ -1213,8 +1277,11 @@ app.post("/api/feed", (req, res) => {
   if (typeof b.explicit === "boolean") {
     db.prepare("UPDATE feeds SET explicit = ? WHERE user_id = ?").run(b.explicit && allowedLevels(req.user).includes("explicit") ? 1 : 0, req.user.id);
   }
+  for (const k of ["studio", "archive"]) {
+    if (typeof b[k] === "boolean") db.prepare(`UPDATE feeds SET ${k} = ? WHERE user_id = ?`).run(b[k] ? 1 : 0, req.user.id);
+  }
   const n = db.prepare("SELECT * FROM feeds WHERE user_id = ?").get(req.user.id);
-  res.json({ ok: true, url: `${publicBase(req)}/feed/${n.token}.xml`, explicit: !!n.explicit });
+  res.json({ ok: true, url: `${publicBase(req)}/feed/${n.token}.xml`, explicit: !!n.explicit, studio: !!n.studio, archive: !!n.archive });
 });
 
 // E-book, print-ready picture book, and the chapter list YouTube wants in a video's description.

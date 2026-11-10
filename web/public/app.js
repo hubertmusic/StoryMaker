@@ -1927,6 +1927,20 @@ async function feedPanel() {
       w.textContent = "This address starts with http. Some podcast apps only accept https: open StoryMaker at its secure address (your Tailscale .ts.net name) and the feed address will use it.";
       p.appendChild(w);
     }
+    const pick = document.createElement("div"); pick.className = "feed-row feed-pick";
+    if (r.nas) {
+      for (const [k, label] of [["studio", "Audiobooks from Audio Studio"], ["archive", "Archived stories (played straight from the NAS)"]]) {
+        const l = document.createElement("label"); l.className = "check";
+        const c = document.createElement("input"); c.type = "checkbox"; c.checked = !!r[k];
+        c.addEventListener("change", async () => draw({ ...r, ...(await api("/api/feed", { [k]: c.checked })) }));
+        l.append(c, ` ${label}`); pick.appendChild(l);
+      }
+    } else {
+      const n = document.createElement("p"); n.className = "hint";
+      n.textContent = "Once StoryMaker runs on the server with the NAS, Audio Studio's audiobooks and your archived stories can be in the feed too.";
+      pick.appendChild(n);
+    }
+    p.appendChild(pick);
     const tools = document.createElement("div"); tools.className = "feed-row";
     if (r.canExplicit) {
       const l = document.createElement("label"); l.className = "check";
