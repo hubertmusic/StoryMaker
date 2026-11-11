@@ -26,7 +26,8 @@ async function load() {
     $("checked").textContent = "Can't reach StoryMaker. Is the server on?";
     $("refresh").disabled = false; return;
   } finally { $("refresh").disabled = false; }
-  const up = r.uptime > 86400 ? `${Math.round(r.uptime / 86400)} days` : r.uptime > 3600 ? `${Math.round(r.uptime / 3600)} hours` : `${Math.max(1, Math.round(r.uptime / 60))} minute${Math.round(r.uptime / 60) > 1 ? "s" : ""}`;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const up = r.uptime > 86400 ? plural(Math.round(r.uptime / 86400), "day") : r.uptime > 3600 ? plural(Math.round(r.uptime / 3600), "hour") : plural(Math.max(1, Math.round(r.uptime / 60)), "minute");
   $("checked").textContent = `Checked at ${new Date(r.checked).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. StoryMaker has been running for ${up}. This page checks again every 15 seconds.`;
 
   const now = $("nowList"); now.replaceChildren();

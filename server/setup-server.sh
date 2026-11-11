@@ -109,6 +109,9 @@ if command -v ollama >/dev/null 2>&1 || yes "  Install Ollama here as the backup
   sudo mkdir -p /etc/systemd/system/ollama.service.d
   printf '[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0"\n' | sudo tee /etc/systemd/system/ollama.service.d/storymaker.conf >/dev/null
   sudo systemctl daemon-reload && sudo systemctl restart ollama
+  if sudo ufw status 2>/dev/null | grep -q "Status: active"; then      # the firewall: let StoryMaker's container in
+    sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp comment "StoryMaker to Ollama" >/dev/null
+  fi
   sleep 3
   MODEL="$(grep -E '^OLLAMA_ADULT_MODEL=' "$APP/storymaker.env" | tail -1 | cut -d= -f2)"; MODEL="${MODEL:-dolphin3}"
   echo "  Getting $MODEL (a few GB)…"
