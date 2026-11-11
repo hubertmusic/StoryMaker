@@ -24,6 +24,12 @@ yes() { local v; v="$(ask "$1 (y/n)")"; [ "$v" = "y" ] || [ "$v" = "Y" ]; }
 [ "$(uname -s)" = "Linux" ] || { echo "This is for the Linux server."; exit 1; }
 [ -n "$MAC" ] || MAC="$(ask "The Mac's address (its Tailscale IP, e.g. 100.87.112.63):")"
 
+echo "▸ Your password on this server, for installing tools and connecting the NAS"
+until sudo -v; do
+  yes "  That didn't work. Try again?" || { echo "  Setup needs your password (sudo). Run this again when ready."; exit 1; }
+done
+( while kill -0 $$ 2>/dev/null; do sudo -n -v 2>/dev/null; sleep 50; done ) &   # don't ask again halfway through
+
 echo "▸ 1. Docker and the NAS tools"
 if ! command -v docker >/dev/null 2>&1; then
   if yes "  Docker isn't installed. Install it now (from get.docker.com)?"; then

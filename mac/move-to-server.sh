@@ -31,14 +31,19 @@ fi
 echo "  Using $NASDIR"
 
 echo "▸ The server"
-SERVER="$(ask "  The server's address (its Tailscale name or IP):")"
+SERVER="$(ask "  The server's address (its Tailscale name or IP, e.g. 100.78.23.75):")"
+SERVER="${SERVER#http://}"; SERVER="${SERVER#https://}"; SERVER="${SERVER%%/*}"; SERVER="${SERVER%%:*}"   # just the name
 SUSER="$(ask "  Your user name on the server [$USER]:")"; SUSER="${SUSER:-$USER}"
 ssh -o ConnectTimeout=10 "$SUSER@$SERVER" true || { echo "  Can't SSH to $SUSER@$SERVER. Check it's on and SSH works."; exit 1; }
 TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 MACIP="$( (command -v tailscale >/dev/null && tailscale ip -4) || ([ -x "$TS" ] && "$TS" ip -4) || ipconfig getifaddr en0 || true)"
 MACIP="$(echo "$MACIP" | head -1)"
-v="$(ask "  This Mac's address, as the server should reach it [$MACIP]:")"; MACIP="${v:-$MACIP}"
-[ -n "$MACIP" ] || { echo "  Need this Mac's address."; exit 1; }
+while :; do
+  v="$(ask "  This Mac's address, as the server should reach it [$MACIP] (press Return to use it):")"
+  v="${v:-$MACIP}"
+  if [[ "$v" =~ ^[A-Za-z0-9.-]+$ ]]; then MACIP="$v"; break; fi
+  echo "  That doesn't look like an address. Just press Return, or type something like 100.87.112.63."
+done
 
 echo "▸ Pausing StoryMaker on this Mac (so nothing changes while it's copied)"
 (cd "$APP" && docker compose stop) || true
@@ -93,11 +98,23 @@ ssh "$SUSER@$SERVER" 'mkdir -p ~/storymaker-move && chmod 700 ~/storymaker-move'
 scp -q "$STAGE"/* "$SUSER@$SERVER:storymaker-move/"
 ssh "$SUSER@$SERVER" 'chmod 600 ~/storymaker-move/storymaker.env'
 
+# already set up (for example by running setup-server.sh on the server yourself)? then don't do it again
+READY="$(ssh "$SUSER@$SERVER" 'test -f ~/StoryMaker/storymaker.env && curl -s -o /dev/null -w "%{http_code}" -m 5 http://localhost:8095/login.html' 2>/dev/null || true)"
+if [ "$READY" = "200" ]; then
+  echo "▸ StoryMaker is already running on the server: skipping its setup."
+  ssh "$SUSER@$SERVER" 'rm -f ~/storymaker-move/storymaker.env' || true
+else
 echo "▸ Setting up the server (it will ask a few things: the NAS's address and login, Ollama)…"
+echo "  First it asks for $SUSER's password ON THE SERVER ([sudo] Password). Type it and press Return: it won't"
+echo "  show as you type, and it gives up after a few minutes if nothing is typed."
 ssh -t "$SUSER@$SERVER" "bash ~/storymaker-move/setup-server.sh '$MACIP'" || {
   echo "  The server setup didn't finish. Fix what it said, then run this again (copying skips what's done)."
-  echo "  Meanwhile StoryMaker on this Mac can be started again with: cd ~/StoryMaker && docker compose start"
+  echo "  Or set the server up from its own terminal:  bash ~/storymaker-move/setup-server.sh $MACIP"
+  echo "  and then run this again here: it sees the server is ready and just finishes this Mac's part."
+  echo "  Starting StoryMaker on this Mac again for now."
+  (cd "$APP" && docker compose start) >/dev/null 2>&1 || true
   exit 1; }
+fi
 
 echo "▸ Letting the server use this Mac's Ollama"
 PLIST="$HOME/Library/LaunchAgents/com.storymaker.ollama-network.plist"
