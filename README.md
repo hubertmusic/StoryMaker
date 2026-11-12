@@ -978,3 +978,18 @@ everything done so far, so another story or book can go first. Resume carries on
   into its StoryMaker story shows up once, as that story. People see only their own books and stories (you see
   everyone's), and Explicit stays out unless you tick it in.
 - This needs StoryMaker running on the server with the NAS (NAS_ROOT, which docker-compose.server.yml sets).
+
+## 30. Sounds read the way people say them
+
+Before anything is read aloud (StoryMaker's narrator and Audio Studio's voices), sounds and stretched words are turned
+into the form a voice says naturally, instead of reading them letter by letter:
+
+- "Mmmmm…" → *Mmm* (a hum), "HMMM" → *Hmm*, "Shhhh!" → *Shh*, "Grrrr" → *Grr*, "Brrr", "Zzzz" (snoring),
+  "HMPH", "Pffft", "Mm-hmm"/"Mhm", "Ewww", "Mwah". Kokoro is given these sounds directly, because from the letters
+  it would say "em em em" or "S H H".
+- Hesitations and reactions: "Ummm", "Uhhh", "Errr", "Ahhh", "Ooooh", "Ohhh", "Awww", "Ughhh", "Whoa", "Eeek".
+- Stretched words: "NOOOOO" → *No*, "Sooooo" → *So*, "Pleeease", "Heyyyy", "gooood" → *good*, "Hellooooo".
+- Laughs: "Hahaha" → *Ha ha ha*, "Muahahaha" → *Mwah ha ha ha*. Stutters: "W-w-what?" → a pause, then *what?*
+- Short SHOUTED words ("NO!", "WHY") are read normally. Acronyms (FBI) and Roman numerals (Henry III) are left alone.
+
+The story text, subtitles and read-along keep the original spelling; only what's spoken changes.

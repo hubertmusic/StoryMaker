@@ -3442,6 +3442,111 @@ DEFAULT_VOICE_KEY = {"elevenlabs": "ELEVENLABS_VOICE_ID", "openai": "OPENAI_VOIC
                      "say": "SAY_VOICE", "edge": "EDGE_VOICE", "kokoro": "KOKORO_VOICE"}
 
 
+# ───────────────────────────── sounds people make, said and not spelled ─────────────────────────────
+# Stories are full of "Mmmmm…", "HMMM", "Shhh!", "Grrr", "Nooooo" and "W-w-what?". A voice reads those letter by
+# letter ("em em em", "S H H") or stumbles. Before anything is read aloud they become the usual written form a voice
+# knows how to say; for the ones even that doesn't fix in Kokoro (it would still spell "Mmm" and "Shh"), the exact
+# sound is handed over directly. What you read on the page (story text, subtitles, read-along) keeps the original.
+
+# the letters of the word with repeats squeezed ("hmmmm" → "hm", "shhh" → "sh") → (what's read, Kokoro's sound)
+SOUND_WORDS = {
+    "hm": ("Hmm", "hˈəm"), "hum": None, "m": ("Mmm", "mːː"), "mhm": ("Mm-hmm", "mhˈmː"), "m-hm": ("Mm-hmm", "mhˈmː"),
+    "um": ("Um", None), "uhm": ("Um", None), "erm": ("Erm", None), "uh": ("Uh", None), "er": ("Er", None),
+    "ah": ("Ah", None), "oh": ("Oh", None), "aw": ("Aww", None), "ew": ("Ew", "ˈiːjuː"), "eh": ("Eh", None),
+    "sh": ("Shh", "ʃːː"), "z": ("Zzz", "zːː"), "gr": ("Grr", "ɡɹːː"), "br": ("Brr", "bɹːː"),
+    "hmph": ("Hmph", "hˈʌmf"), "humph": ("Hmph", "hˈʌmf"), "hmf": ("Hmph", "hˈʌmf"),
+    "pft": ("Pfft", "pfːt"), "pf": ("Pfft", "pfːt"), "psst": ("Psst", None), "pst": ("Psst", None),
+    "mwah": ("Mwah", "mwˈɑː"), "muah": ("Mwah", "mwˈɑː"), "ugh": ("Ugh", None), "argh": ("Argh", None),
+    "agh": ("Argh", None), "arg": ("Argh", None), "huh": ("Huh", None), "whoa": ("Whoa", None), "woah": ("Whoa", None),
+    "phew": ("Phew", None), "yay": ("Yay", None), "yum": ("Yum", None), "wow": ("Wow", None), "ow": ("Ow", None),
+    "ouch": ("Ouch", None), "whe": ("Whee", None), "ek": ("Eek", None), "tsk": ("Tsk", None),
+}
+SOUND_WORDS = {k: v for k, v in SOUND_WORDS.items() if v}
+# written forms whose sound Kokoro gets wrong from the letters: the sound to use instead
+KOKORO_SOUNDS = {w: ipa for w, ipa in SOUND_WORDS.values() if ipa}
+_KOKORO_SOUND_RE = re.compile(r"(?<![\w-])(" + "|".join(sorted(map(re.escape, KOKORO_SOUNDS), key=len, reverse=True))
+                              + r")(?![\w-])")
+# short words that are often SHOUTED and would otherwise be spelled out ("NO!" → "No!")
+_SHOUTED_SHORT = {"no", "yes", "why", "hey", "go", "run", "now", "who", "me", "you", "not", "out", "get", "off",
+                  "but", "how", "yet", "and", "the", "him", "her", "she", "his", "our", "boo", "ow", "oi", "aye"}
+_LAUGH = re.compile(r"^(?:mw?u?a)?((?:ha){2,}|(?:he){2,}|(?:hi){2,}|(?:ho){2,})h?$", re.I)
+
+
+def _match_case(word, like):
+    if like.isupper() and len(like) > 1:
+        return word[:1].upper() + word[1:].lower()       # SHOUTED: read normally (the ! carries it)
+    if like[:1].isupper():
+        return word[:1].upper() + word[1:]
+    return word.lower() if word not in KOKORO_SOUNDS else word
+
+
+def _squeeze(w, keep=1):
+    return re.sub(r"([a-z])\1+", lambda m: m.group(1) * min(keep, len(m.group(0))), w)
+
+
+def _say_word(m):
+    w = m.group(0)
+    low = w.lower()
+    if re.fullmatch(r"[ivxlcdm]+", low) and w.isupper():          # Roman numerals ("Henry III") stay
+        return w
+    laugh = _LAUGH.match(low)
+    if laugh:                                                     # "hahaha" → "Ha ha ha", "muahaha" → "Mwah ha ha"
+        unit = laugh.group(1)[:2]
+        n = min(3, len(laugh.group(1)) // 2)
+        out = " ".join([unit] * n)
+        if low.startswith(("mwa", "mua")):
+            out = "Mwah " + out
+        return _match_case(out, w) if not out.startswith("Mwah") else out
+    sq = _squeeze(low)
+    hit = SOUND_WORDS.get(sq) if low != "err" else None             # (to err is human)
+    if hit and (sq != "m" or len(low) >= 2) and (sq != "z" or len(low) >= 3) and not (sq in ("oh", "ah", "aw")
+                                                                                        and low.startswith("oo")):
+        word = hit[0]
+        if sq == "oh" and low.startswith("oo"):
+            word = "Ooh"
+        return word if word in KOKORO_SOUNDS else _match_case(word, w)
+    if sq in ("oh", "ah") and low.startswith("oo"):
+        return _match_case("Ooh", w)
+    if re.search(r"([a-z])\1\1", low):                            # "Nooooo", "sooo", "pleeease", "heyyy"
+        one, two = re.sub(r"([a-z])\1{2,}", r"\1", low), re.sub(r"([a-z])\1{2,}", r"\1\1", low)
+        sp = _speller()
+        if sp:                                                    # the likelier word: "gooood" → good, "sooo" → so
+            f1, f2 = sp.word_frequency[one] if sp.known([one]) else 0, sp.word_frequency[two] if sp.known([two]) else 0
+            if f2 > f1:
+                return _match_case(two, w)
+        return _match_case(one, w)
+    if w.isupper() and 2 <= len(w) <= 3 and low in _SHOUTED_SHORT:
+        return _match_case(low, w)
+    return w
+
+
+def speakable(text):
+    """Sounds and stretched words in a form a voice says naturally (see SOUND_WORDS above)."""
+    t = str(text or "")
+    # stutters: "W-w-what?" → "… what?", "th-th-that" → "… that" (a voice reads the fragments as letters)
+    t = re.sub(r"\b([A-Za-z]{1,2})-(?:\1-)*(\1[a-z]+)\b", lambda m: "… " + m.group(2), t, flags=re.I)
+    t = re.sub(r"(?<![\w'])[A-Za-z]+(?:-[A-Za-z]+)?(?![\w'])", _say_word, t)
+    return t
+
+
+def kokoro_text(k, text, lang):
+    """For Kokoro: the text, or its sounds with the hard ones (Mmm, Shh, Grr…) put in directly."""
+    if not _KOKORO_SOUND_RE.search(text):
+        return text, False
+    out, pos = "", 0
+    for m in _KOKORO_SOUND_RE.finditer(text):
+        piece = text[pos:m.start()]
+        if piece.strip():
+            out += (" " if out and piece[:1].isspace() else "") + k.tokenizer.phonemize(piece, lang)
+        out += (" " if out and (piece == "" or piece[-1:].isspace()) and not out.endswith(" ") else "") \
+            + KOKORO_SOUNDS[m.group(1)]
+        pos = m.end()
+    rest = text[pos:]
+    if rest.strip():
+        out += ("" if rest[:1] in ",.!?;:…" else " ") + k.tokenizer.phonemize(rest, lang)
+    return re.sub(r"\s{2,}", " ", out).strip(), True
+
+
 def tts_clean(text):
     """What a voice reads: no stray symbols or formatting, natural pauses, nothing it would stumble over."""
     t = str(text or "")
@@ -3449,9 +3554,12 @@ def tts_clean(text):
     t = re.sub(r"\s*[—–]\s*", ", ", t)                          # dashes read as a pause
     t = re.sub(r"\.{4,}|…", "...", t)
     t = re.sub(r"([!?])\1+", r"\1", t)                          # "!!!" → "!"
+    t = speakable(t)                                             # "Mmmm", "HMMM", "Shhh", "Nooo" said, not spelled
     t = re.sub(r"\b([A-Z]{4,})\b", lambda m: m.group(1).capitalize(), t)   # SHOUTED words read normally
-    t = re.sub(r"\b(\w+)( \1\b)+", lambda m: m.group(0) if m.group(1).lower() in ("had", "that", "is", "do", "very")
-               else m.group(1), t, flags=re.I)                   # "the the" (but "had had" is fine)
+    t = re.sub(r"\b(\w+)( \1\b)+", lambda m: m.group(0) if m.group(1).lower() in (
+        "had", "that", "is", "do", "very", "ha", "he", "hi", "ho", "tsk", "knock", "bye", "choo", "tick", "la", "na",
+        "no", "yes", "go", "run", "ding", "boo", "ho", "come", "now", "please", "help", "wait", "stop", "hurry")
+               else m.group(1), t, flags=re.I)                   # "the the" (but "had had", "ha ha" are fine)
     t = re.sub(r"\s+([,.!?;:])", r"\1", t)
     t = re.sub(r"([,.!?;:])(?=[A-Za-z])", r"\1 ", t)
     t = re.sub(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", "", t)    # emoji
@@ -3523,7 +3631,9 @@ def narrate(cfg, text, out_wav, engine, voice=None, style=None):
         names = [n.strip() for n in re.split(r"[@^]", spec)[0].split("+") if n.strip()]
         k = kokoro_engine(cfg)
         style = names[0] if len(names) == 1 else sum(k.get_voice_style(n) for n in names) / len(names)
-        samples, sr = k.create(text, voice=style, speed=speed, lang="en-gb" if names[0].startswith("b") else "en-us")
+        lang = "en-gb" if names[0].startswith("b") else "en-us"
+        said, as_sounds = kokoro_text(k, text, lang)
+        samples, sr = k.create(said, voice=style, speed=speed, lang=lang, is_phonemes=as_sounds)
         sf.write(str(tmp), samples, sr)
         if abs(pitch - 1) > 0.005:            # a small pitch change makes similar voices easy to tell apart
             shifted = tmp.with_name(tmp.stem + "_p.wav")

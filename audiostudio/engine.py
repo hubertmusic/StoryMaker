@@ -42,7 +42,7 @@ else:
                      "and can't find it. Copy it there from the StoryMaker zip, then start the studio again.")
 import storymaker as sm  # noqa: E402
 
-STUDIO_VERSION = "3.6 (Nov 9)"          # shown on the page and in the log, so you can tell which one is running
+STUDIO_VERSION = "3.7 (Nov 11)"          # shown on the page and in the log, so you can tell which one is running
 
 # ───────────────────────────── settings ─────────────────────────────
 
