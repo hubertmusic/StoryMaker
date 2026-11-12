@@ -3460,6 +3460,7 @@ SOUND_WORDS = {
     "agh": ("Argh", None), "arg": ("Argh", None), "huh": ("Huh", None), "whoa": ("Whoa", None), "woah": ("Whoa", None),
     "phew": ("Phew", None), "yay": ("Yay", None), "yum": ("Yum", None), "wow": ("Wow", None), "ow": ("Ow", None),
     "ouch": ("Ouch", None), "whe": ("Whee", None), "ek": ("Eek", None), "tsk": ("Tsk", None),
+    "m-m": ("Mm-mm", "mːmː"), "uh-uh": ("Uh-uh", None), "uh-huh": ("Uh-huh", None),
 }
 SOUND_WORDS = {k: v for k, v in SOUND_WORDS.items() if v}
 # written forms whose sound Kokoro gets wrong from the letters: the sound to use instead
@@ -3477,7 +3478,7 @@ def _match_case(word, like):
         return word[:1].upper() + word[1:].lower()       # SHOUTED: read normally (the ! carries it)
     if like[:1].isupper():
         return word[:1].upper() + word[1:]
-    return word.lower() if word not in KOKORO_SOUNDS else word
+    return word.lower() if word not in KOKORO_SOUNDS and word not in SOUND_ACTING else word
 
 
 def _squeeze(w, keep=1):
@@ -3502,11 +3503,11 @@ def _say_word(m):
     if hit and (sq != "m" or len(low) >= 2) and (sq != "z" or len(low) >= 3) and not (sq in ("oh", "ah", "aw")
                                                                                         and low.startswith("oo")):
         word = hit[0]
-        if sq == "oh" and low.startswith("oo"):
-            word = "Ooh"
-        return word if word in KOKORO_SOUNDS else _match_case(word, w)
+        if sq in ("ah", "oh") and len(low) >= 3:                  # "Ahhh" (relief), "Ohhh" (now I see): drawn out
+            word = {"ah": "Ahh", "oh": "Ohh"}[sq]
+        return word if word in KOKORO_SOUNDS or word in SOUND_ACTING else _match_case(word, w)
     if sq in ("oh", "ah") and low.startswith("oo"):
-        return _match_case("Ooh", w)
+        return "Ooh"
     if re.search(r"([a-z])\1\1", low):                            # "Nooooo", "sooo", "pleeease", "heyyy"
         one, two = re.sub(r"([a-z])\1{2,}", r"\1", low), re.sub(r"([a-z])\1{2,}", r"\1\1", low)
         sp = _speller()
@@ -3546,6 +3547,167 @@ def kokoro_text(k, text, lang):
         out += ("" if rest[:1] in ",.!?;:…" else " ") + k.tokenizer.phonemize(rest, lang)
     return re.sub(r"\s{2,}", " ", out).strip(), True
 
+# How Kokoro performs each sound, in the narrator's own voice: the sound, how long, and its tune. A tune is
+# (when, pitch) points: when from 0 (start) to 1 (end), pitch 1.0 = the voice's normal pitch. Some sounds are two
+# parts ("Mm-mm": two hums, the second lower). tremble = a growl or a shiver; fade = soft start and end.
+SOUND_ACTING = {
+    "Mmm":    [("mːːːː", 0.95, [(0, .96), (.45, 1.14), (1, .84)])],                      # tasty: rises, then falls
+    "Hmm":    [("hmːːː", 0.75, [(0, 1.0), (.45, .95), (.85, 1.13), (1, 1.15)])],          # thinking: lifts at the end
+    "Mm-hmm": [("mːː", 0.30, [(0, .96), (1, .93)]), ("hmːː", 0.42, [(0, 1.0), (.8, 1.14), (1, 1.15)])],   # yes: low, then higher
+    "Mm-mm":  [("mːː", 0.30, [(0, 1.06), (1, 1.04)]), ("mːː", 0.40, [(0, .92), (1, .84)])],   # no: second one lower
+    "Uh-huh": [("ʌː", 0.24, [(0, .95), (1, .94)]), ("hʌː", 0.32, [(0, 1.0), (1, 1.12)])],
+    "Uh-uh":  [("ʔʌː", 0.24, [(0, 1.06), (1, 1.05)]), ("ʔʌː", 0.30, [(0, .92), (1, .85)])],
+    "Ooh":    [("uːːː", 0.80, [(0, .94), (.5, 1.18), (1, .90)])],                        # wonder: up and over
+    "Ohh":    [("oʊːː", 0.75, [(0, .90), (.4, 1.12), (1, .90)])],                        # now I understand
+    "Ahh":    [("ɑːːː", 0.85, [(0, 1.08), (1, .84)])],                                    # relief: settles down
+    "Aww":    [("ɔːːː", 0.80, [(0, 1.10), (.7, .90), (1, .95)])],                        # sweet / sympathy
+    "Whoa":   [("woʊːː", 0.70, [(0, .90), (.4, 1.15), (1, .86)])],
+    "Ugh":    [("ʌːːɡ", 0.55, [(0, 1.0), (1, .84)])],
+    "Hmph":   [("hˈʌmf", 0.50, [(0, 1.05), (1, .82)])],
+    "Ew":     [("iːjuː", 0.60, [(0, 1.15), (1, .90)])],
+    "Shh":    [("ʃːːː", 0.80, None)],
+    "Zzz":    [("zːːː", 1.00, [(0, .96), (1, .92)])],
+    "Grr":    [("ɡɹːːː", 0.85, [(0, .82), (1, .78)])],
+    "Brr":    [("bɹːːː", 0.80, [(0, 1.0), (1, .95)])],
+}
+_TREMBLE = {"Grr": (27, .55), "Brr": (16, .6), "Zzz": (3, .3)}
+_SOUND_ACT_RE = re.compile(r"(?<![\w-])(" + "|".join(sorted(map(re.escape, SOUND_ACTING), key=len, reverse=True))
+                           + r")(?![\w-])")
+
+
+def _tune(x, sr, seconds, points):
+    """Sing a sound to a tune: read through it faster (higher) or slower (lower) along the points, so the pitch
+    glides smoothly, and come out about `seconds` long."""
+    import numpy as np
+    if not points or len(x) < 10:
+        n = int(seconds * sr)                           # no tune (Shh): just fit it to the length
+        idx = np.linspace(0, len(x) - 1, max(n, 10))
+        return np.interp(idx, np.arange(len(x)), x).astype(np.float32)
+    n = int(seconds * sr)
+    t = np.linspace(0, 1, n)
+    rate = np.interp(t, [p[0] for p in points], [p[1] for p in points])
+    pos = np.cumsum(rate)
+    pos *= (len(x) - 1) / pos[-1] if pos[-1] > len(x) - 1 else 1.0    # never run past the end of the sound
+    return np.interp(pos, np.arange(len(x)), x).astype(np.float32)
+
+
+def _sustain(x, sr, need):
+    """Make a sound `need` samples long by holding its steady middle (the hum of "mmm", the "oo" of "ooh") and
+    keeping how it starts and ends, so the tune can then be laid on a steady note."""
+    import numpy as np
+    f = max(1, int(0.01 * sr))
+    rms = np.array([np.sqrt(np.mean(x[i:i + f] ** 2)) for i in range(0, max(1, len(x) - f), f)])
+    if not len(rms) or rms.max() <= 0:
+        return x
+    loud = rms > 0.45 * rms.max()
+    best, run, start = (0, 0), 0, 0                     # the longest steady, loud stretch
+    for i, v in enumerate(list(loud) + [False]):
+        if v:
+            if run == 0:
+                start = i
+            run += 1
+        else:
+            if run > best[1] - best[0]:
+                best = (start, start + run)
+            run = 0
+    a, b = best[0] * f, best[1] * f
+    end = len(rms)
+    while end > best[1] and rms[end - 1] < 0.06 * rms.max():          # no trailing near-silence
+        end -= 1
+    onset, core, tail = x[:a], x[a:b], x[b:end * f]
+    want = int(need) - len(onset) - len(tail)
+    if len(core) < int(0.03 * sr) or want <= len(core):
+        return x[:end * f]
+    g = int(0.05 * sr)                                  # overlap little windows of the steady part, back and forth
+    g = min(g, max(16, len(core) // 2))
+    hop = g // 2
+    win = np.hanning(g).astype(np.float32)
+    out = np.zeros(want + g, dtype=np.float32)
+    norm = np.zeros(want + g, dtype=np.float32)
+    span = max(1, len(core) - g)
+    pos, step = 0, max(1, span // 6)
+    for o in range(0, want, hop):
+        out[o:o + g] += core[pos:pos + g] * win
+        norm[o:o + g] += win
+        pos += step
+        if pos >= span or pos < 0:
+            step = -step
+            pos = min(max(pos, 0), span)
+    held = out[:want] / np.maximum(norm[:want], 1e-3)
+    xf = min(int(0.01 * sr), len(onset), len(held) // 4)
+    if xf:                                              # join smoothly into the held part
+        held[:xf] = held[:xf] * np.linspace(0, 1, xf) + onset[-xf:] * np.linspace(1, 0, xf)
+        onset = onset[:-xf]
+    return np.concatenate([onset, held, tail]).astype(np.float32)
+
+
+def _act_sound(k, style, speed, lang, word, question=False):
+    """One sound performed (see SOUND_ACTING)."""
+    import numpy as np
+    out = []
+    for i, (ipa, secs, points) in enumerate(SOUND_ACTING[word]):
+        if question and points and i == len(SOUND_ACTING[word]) - 1:          # "Hmm?" lifts further
+            points = points[:-2] + [(points[-2][0], points[-2][1] + 0.1), (1, points[-1][1] + 0.12)]
+        secs /= max(0.5, speed)
+        mean = float(np.mean([p[1] for p in points])) if points else 1.0
+        x, sr = k.create(ipa, voice=style, speed=1.0, lang=lang, is_phonemes=True)
+        need = secs * mean * sr                         # how much of the sound the tune reads through
+        x = _sustain(np.asarray(x, dtype=np.float32), sr, need) if points else np.asarray(x, dtype=np.float32)
+        y = _tune(x, sr, secs, points)
+        if word in _TREMBLE:
+            hz, depth = _TREMBLE[word]
+            tt = np.arange(len(y)) / sr
+            y = y * (1 - depth * 0.5 * (1 + np.sin(2 * np.pi * hz * tt)))
+        rising = bool(points) and points[-1][1] > points[0][1]        # ends going up: don't fade the lift away
+        fade_in, fade_out = min(len(y) // 4, int(0.05 * sr)), min(len(y) // 2, int((0.05 if rising else 0.14) * sr))
+        y[:fade_in] *= np.linspace(0, 1, fade_in)
+        y[len(y) - fade_out:] *= np.linspace(1, 0, fade_out)
+        out.append(y)
+        if i < len(SOUND_ACTING[word]) - 1:
+            out.append(np.zeros(int(0.06 * sr), dtype=np.float32))
+    return np.concatenate(out), sr
+
+
+def kokoro_say(k, text, style, speed, lang):
+    """Kokoro reading `text`, with any sounds in it performed (SOUND_ACTING) instead of read."""
+    import numpy as np
+    if not _SOUND_ACT_RE.search(text):
+        said, as_sounds = kokoro_text(k, text, lang)
+        return k.create(said, voice=style, speed=speed, lang=lang, is_phonemes=as_sounds)
+    segs, pos = [], 0
+    for m in _SOUND_ACT_RE.finditer(text):
+        segs += [("text", text[pos:m.start()]), ("sound", m.group(1))]
+        pos = m.end()
+    segs.append(("text", text[pos:]))
+    edge = "\\s\"'“”‘’,.!?;:…"
+    def pause(p):                                       # the pause the punctuation asks for
+        return 0.55 if ("…" in p or "..." in p) else 0.38 if any(c in p for c in ".!?;:") else \
+            0.2 if "," in p else 0.1
+    sr = 24000
+    out = []                                            # (audio, is_sound)
+    for i, (kind, val) in enumerate(segs):
+        if kind == "sound":
+            nxt = segs[i + 1][1] if i + 1 < len(segs) else ""
+            y, sr = _act_sound(k, style, speed, lang, val, question=nxt.lstrip()[:1] == "?")
+            if out:
+                out.append((np.zeros(int(pause(segs[i - 1][1][-4:]) * sr), dtype=np.float32), False))
+            out.append((y, True))
+            continue
+        core = re.sub(f"^[{edge}]+", "", val)          # punctuation after a sound is the pause, not words
+        core = re.sub(r"[\s\"'“”‘’]+$", "", core)
+        if not re.search(r"\w", core):
+            continue
+        if out:
+            lead = re.match(f"^[{edge}]*", val).group(0)
+            out.append((np.zeros(int(pause(lead) * sr), dtype=np.float32), False))
+        said, as_sounds = kokoro_text(k, core, lang)
+        x, sr = k.create(said, voice=style, speed=speed, lang=lang, is_phonemes=as_sounds)
+        out.append((np.asarray(x, dtype=np.float32), False))
+    peaks = [float(np.max(np.abs(a))) for a, snd in out if not snd and len(a) and np.any(a)]
+    if peaks:                                           # sounds about as loud as the words around them
+        target = 0.85 * max(peaks)
+        out = [(a * (target / max(1e-6, float(np.max(np.abs(a))))) if snd and np.any(a) else a, snd) for a, snd in out]
+    return np.concatenate([a for a, _ in out]) if out else np.zeros(1, dtype=np.float32), sr
 
 def tts_clean(text):
     """What a voice reads: no stray symbols or formatting, natural pauses, nothing it would stumble over."""
@@ -3632,8 +3794,7 @@ def narrate(cfg, text, out_wav, engine, voice=None, style=None):
         k = kokoro_engine(cfg)
         style = names[0] if len(names) == 1 else sum(k.get_voice_style(n) for n in names) / len(names)
         lang = "en-gb" if names[0].startswith("b") else "en-us"
-        said, as_sounds = kokoro_text(k, text, lang)
-        samples, sr = k.create(said, voice=style, speed=speed, lang=lang, is_phonemes=as_sounds)
+        samples, sr = kokoro_say(k, text, style, speed, lang)
         sf.write(str(tmp), samples, sr)
         if abs(pitch - 1) > 0.005:            # a small pitch change makes similar voices easy to tell apart
             shifted = tmp.with_name(tmp.stem + "_p.wav")

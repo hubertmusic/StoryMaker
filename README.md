@@ -993,3 +993,11 @@ into the form a voice says naturally, instead of reading them letter by letter:
 - Short SHOUTED words ("NO!", "WHY") are read normally. Acronyms (FBI) and Roman numerals (Henry III) are left alone.
 
 The story text, subtitles and read-along keep the original spelling; only what's spoken changes.
+
+**Performed, not just said (Kokoro):** the main sounds are acted out in the narrator's own voice, each with its own
+length and tune: *Mmm* (tasty) is a long hum that rises, then falls; *Hmm* (thinking) starts with a breath and lifts
+at the end, more when it's a question ("Hmm?"); *Mm-hmm* (yes) goes low, then higher; *Mm-mm* (no) is two hums, the
+second lower; *Uh-huh* and *Uh-uh* the same way; *Ooh* goes up and over; *Ahh* (relief) settles down; *Aww*, *Ohh*,
+*Whoa*, *Ugh*, *Hmph* and *Ew* each have their shape; *Grr* growls, *Brr* shivers, *Shh* and *Zzz* are held softly.
+Each one gets the pause its punctuation asks for ("Mmm..." waits longer than "Mmm,"). Audio Studio's Chatterbox voices
+read the tidied words their own expressive way.
