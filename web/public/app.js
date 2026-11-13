@@ -425,6 +425,7 @@ function poll(jobId, data) {
   followingId = jobId;
   $("stopStory").hidden = false; $("stopStory").disabled = false; $("stopStory").textContent = "Stop";
   $("pauseStory").hidden = false; $("pauseStory").disabled = false; $("pauseStory").textContent = "Pause";
+  $("resumeStory").hidden = true;
   polling = setInterval(async () => {
     const st = await api(`/api/status/${jobId}`);
     if (st.state === "running" || st.state === "queued") {
@@ -446,7 +447,12 @@ function poll(jobId, data) {
       $("stopStory").hidden = true; $("pauseStory").hidden = true;
       setMeter(st.progress || 0, st.state === "paused" ? "Paused" : "Stopped");
       show("progressView");
-      showError(st.detail || "Stopped. What was already made is kept in Unfinished stories.");
+      if (st.state === "paused") {
+        $("resumeStory").hidden = false; $("resumeStory").disabled = false; $("resumeStory").dataset.job = jobId;
+        showError("Paused. Everything made so far is kept. Press Resume when you're ready (it's also under Unfinished stories in the Library, on any device).");
+      } else {
+        showError(st.detail || "Stopped. What was already made is kept in Unfinished stories.");
+      }
       loadUnfinished();
     } else if (st.state === "failed") {
       clearInterval(polling);
@@ -461,6 +467,17 @@ $("stopStory").addEventListener("click", () => {
   if (followingId) stopJob(followingId, "making this story? What's already written is kept, and you can carry it on later", $("stopStory"));
 });
 // Pause: another story can be made now; this one waits in Unfinished stories with Resume
+$("resumeStory").addEventListener("click", async () => {
+  const id = $("resumeStory").dataset.job;
+  if (!id) return;
+  $("resumeStory").disabled = true; $("resumeStory").textContent = "Resuming…";
+  const r = await api(`/api/jobs/${id}/resume`, {});
+  $("resumeStory").textContent = "Resume";
+  if (!r.ok) { $("resumeStory").disabled = false; alert(r.error || "Couldn't resume it."); return; }
+  $("resumeStory").hidden = true;
+  checkActive();                                           // follows it again here (and on every device)
+  loadUnfinished();
+});
 $("pauseStory").addEventListener("click", async () => {
   if (!followingId) return;
   $("pauseStory").disabled = true; $("pauseStory").textContent = "Pausing…";
